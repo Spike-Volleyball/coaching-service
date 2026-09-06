@@ -43,6 +43,14 @@ public class TacticsController : Shared.Microservices.Controllers.BaseApiControl
         return Ok(await _tactics.SaveBoardAsync(id, request, JwtPayload!.UserId));
     }
 
+    /// <summary>Fills an empty shelf with the starter boards, in one write and only once.</summary>
+    [HttpPost("tactics-boards/seed")]
+    public async Task<IActionResult> SeedBoards([FromBody] SeedTacticsBoardsRequest request)
+    {
+        CheckIsUserLoggedIn();
+        return Ok(await _tactics.SeedBoardsAsync(request, JwtPayload!.UserId));
+    }
+
     [HttpDelete("tactics-boards/{id:guid}")]
     public async Task<IActionResult> DeleteBoard([FromRoute] Guid id)
     {

@@ -428,6 +428,90 @@ public class TacticsControllerTests
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    [Test]
+    public async Task SeedBoards_OnAnEmptyShelf_WritesThemInTheOrderTheyWereAuthored()
+    {
+        // Arrange
+        SetAuth(Guid.NewGuid());
+
+        // Act
+        var response = await _client.PostAsJsonAsync("/v1/tactics-boards/seed", SeedRequest(), JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var seeded = await response.Content.ReadFromJsonAsync<List<BoardResponse>>(JsonOptions);
+        seeded!.Select(b => b.Title).Should().Equal("First", "Second", "Third");
+        seeded.Should().OnlyContain(b => b.Version == 1);
+    }
+
+    [Test]
+    public async Task SeedBoards_AskedTwice_LeavesOneOfEveryStarterBoard()
+    {
+        // Arrange — React runs its effects twice in development, so the client will ask twice.
+        SetAuth(Guid.NewGuid());
+        await _client.PostAsJsonAsync("/v1/tactics-boards/seed", SeedRequest(), JsonOptions);
+
+        // Act
+        var second = await _client.PostAsJsonAsync("/v1/tactics-boards/seed", SeedRequest(), JsonOptions);
+
+        // Assert
+        second.StatusCode.Should().Be(HttpStatusCode.OK);
+        var listed = await second.Content.ReadFromJsonAsync<List<BoardResponse>>(JsonOptions);
+        listed!.Select(b => b.Title).Should().BeEquivalentTo(["First", "Second", "Third"]);
+        (await CountBoardsAsync()).Should().Be(3);
+    }
+
+    [Test]
+    public async Task GetBoards_AFreshlySeededShelf_ComesBackInTheSameOrderEveryTime()
+    {
+        // Arrange — one batch means one timestamp, so recency alone cannot order them.
+        SetAuth(Guid.NewGuid());
+        await _client.PostAsJsonAsync("/v1/tactics-boards/seed", SeedRequest(), JsonOptions);
+
+        // Act
+        var first = await _client.GetFromJsonAsync<List<BoardResponse>>("/v1/tactics-boards?scope=personal", JsonOptions);
+        var again = await _client.GetFromJsonAsync<List<BoardResponse>>("/v1/tactics-boards?scope=personal", JsonOptions);
+
+        // Assert
+        again!.Select(b => b.Id).Should().Equal(first!.Select(b => b.Id));
+    }
+
+    [Test]
+    public async Task SeedBoards_OnAClubShelfWithoutStanding_ReturnsForbidden()
+    {
+        // Arrange
+        var clubId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        _factory.ClubsGrpcClient.IsClubStaffAsync(userId, clubId).Returns(false);
+        SetAuth(userId);
+
+        // Act
+        var response = await _client.PostAsJsonAsync(
+            "/v1/tactics-boards/seed", SeedRequest(scope: "club", clubId: clubId), JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await CountBoardsAsync()).Should().Be(0);
+    }
+
+    private static object SeedRequest(string scope = "personal", Guid? clubId = null) => new
+    {
+        scope,
+        clubId,
+        teamId = (Guid?)null,
+        boards = new[] { "First", "Second", "Third" }.Select(title => new
+        {
+            id = Guid.NewGuid(),
+            title,
+            category = "Match day",
+            system = "5-1",
+            folderId = (Guid?)null,
+            isFavorite = false,
+            frameCount = 1,
+            document = Document
+        }).ToArray()
+    };
+
     private async Task<FolderResponse> CreateFolderAsync(string name)
     {
         var response = await _client.PostAsJsonAsync(

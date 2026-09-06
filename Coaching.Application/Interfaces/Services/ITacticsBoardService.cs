@@ -8,6 +8,7 @@ public interface ITacticsBoardService
     Task<TacticsBoardDto> GetBoardAsync(Guid boardId, Guid userId);
     Task<TacticsBoardDto> SaveBoardAsync(Guid boardId, SaveTacticsBoardRequest request, Guid userId);
     Task DeleteBoardAsync(Guid boardId, Guid userId);
+    Task<IReadOnlyList<TacticsBoardDto>> SeedBoardsAsync(SeedTacticsBoardsRequest request, Guid userId);
 
     Task<IReadOnlyList<TacticsFolderDto>> ListFoldersAsync(TacticsShelfQuery query, Guid userId);
     Task<TacticsFolderDto> CreateFolderAsync(CreateTacticsFolderRequest request, Guid userId);

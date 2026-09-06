@@ -63,6 +63,31 @@ public record SaveTacticsBoardRequest
     public int? ExpectedVersion { get; init; }
 }
 
+/// <summary>
+/// A whole starter shelf in one request. Written as one batch because seeding board by board
+/// stamps each with its own time, and the library orders by recency — the shelf would come out
+/// back to front, and a client that asked twice would leave two of everything.
+/// </summary>
+public record SeedTacticsBoardsRequest
+{
+    public TacticsScope Scope { get; init; }
+    public Guid? ClubId { get; init; }
+    public Guid? TeamId { get; init; }
+    public List<SeedTacticsBoard> Boards { get; init; } = [];
+}
+
+public record SeedTacticsBoard
+{
+    public Guid Id { get; init; }
+    public string Title { get; init; } = string.Empty;
+    public string Category { get; init; } = string.Empty;
+    public string System { get; init; } = string.Empty;
+    public Guid? FolderId { get; init; }
+    public bool IsFavorite { get; init; }
+    public int FrameCount { get; init; }
+    public string Document { get; init; } = string.Empty;
+}
+
 public record CreateTacticsFolderRequest
 {
     public TacticsScope Scope { get; init; }

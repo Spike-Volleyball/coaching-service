@@ -29,7 +29,9 @@ public class TacticsBoardService(
 
         return await boards.QueryNoTracking()
             .Where(OnShelf(shelf, userId))
-            .OrderByDescending(b => b.UpdatedAt)
+            // Id only breaks ties, which is a whole freshly seeded shelf: written in one batch, they
+            // share a timestamp, and without it the library would reshuffle on every visit.
+            .OrderByDescending(b => b.UpdatedAt).ThenBy(b => b.Id)
             .Select(SummaryProjection)
             .ToListAsync();
     }
@@ -102,6 +104,45 @@ public class TacticsBoardService(
 
         boards.Delete(board);
         await boards.SaveChangesAsync();
+    }
+
+    public async Task<IReadOnlyList<TacticsBoardDto>> SeedBoardsAsync(SeedTacticsBoardsRequest request, Guid userId)
+    {
+        var shelf = await TacticsAccess.EnsureMayUseAsync(
+            TacticsAccess.ShelfOf(request.Scope, request.ClubId, request.TeamId), userId, clubs);
+
+        var existing = await boards.QueryNoTracking()
+            .Where(OnShelf(shelf, userId))
+            .OrderByDescending(b => b.UpdatedAt).ThenBy(b => b.Id)
+            .Select(SummaryProjection)
+            .ToListAsync();
+
+        // Seeding is what an empty shelf gets, once. Asking twice — which a client will, since React
+        // runs its effects twice in development — must not leave two of every starter board.
+        if (existing.Count > 0)
+            return existing;
+
+        var seeded = request.Boards.Select(board => new TacticsBoard
+        {
+            Id = board.Id == Guid.Empty ? Guid.NewGuid() : board.Id,
+            Title = Require(board.Title, "A board needs a title", TacticsBoard.TitleMaxLength),
+            Category = Trim(board.Category, TacticsBoard.CategoryMaxLength),
+            System = Trim(board.System, TacticsBoard.SystemMaxLength),
+            Scope = shelf.Scope,
+            ClubId = shelf.ClubId,
+            TeamId = shelf.TeamId,
+            IsFavorite = board.IsFavorite,
+            FrameCount = Math.Max(board.FrameCount, 0),
+            Document = ValidDocument(board.Document),
+            OwnerUserId = userId,
+            Version = 1
+        }).ToList();
+
+        boards.AddRange(seeded);
+        await boards.SaveChangesAsync();
+
+        // In the order they were authored, which the shelf cannot tell from timestamps they share.
+        return seeded.Select(Summary).ToList();
     }
 
     public async Task<IReadOnlyList<TacticsFolderDto>> ListFoldersAsync(TacticsShelfQuery query, Guid userId)
