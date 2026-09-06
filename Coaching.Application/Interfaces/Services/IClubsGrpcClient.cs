@@ -1,4 +1,4 @@
-using Shared.Enums;
+﻿using Shared.Enums;
 
 namespace Coaching.Application.Interfaces.Services;
 
@@ -61,6 +61,19 @@ public interface IClubsGrpcClient
     /// Check whether a user belongs to one team or group.
     /// </summary>
     Task<bool> IsUserUnitMemberAsync(Guid userId, ContextType contextType, Guid contextId);
+
+    /// <summary>
+    /// Whether a user is staff of a club — someone who runs or coaches it, rather than plays for it.
+    /// This is the question coaching material asks before showing itself.
+    /// </summary>
+    Task<bool> IsClubStaffAsync(Guid userId, Guid clubId);
+
+    /// <summary>
+    /// Whether a user is staff of one team or group. Wider than
+    /// <see cref="CanGiveFeedbackInUnitAsync"/>: a manager runs the team without coaching its
+    /// players, which is authority enough to read its plays and not enough to appraise them.
+    /// </summary>
+    Task<bool> IsUnitStaffAsync(Guid userId, ContextType contextType, Guid contextId);
 
     /// <summary>
     /// The club that owns a team or group. Null when the unit does not exist.
