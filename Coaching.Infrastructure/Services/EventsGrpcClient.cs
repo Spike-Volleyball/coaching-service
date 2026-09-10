@@ -7,7 +7,7 @@ namespace Coaching.Infrastructure.Services;
 
 /// <summary>
 /// gRPC client for events-service authorization checks with in-memory caching.
-/// Participant status is cached for 5 minutes to reduce cross-service calls.
+/// An event's roster is cached for 5 minutes to reduce cross-service calls.
 /// </summary>
 public class EventsGrpcClient : IEventsGrpcClient
 {
@@ -16,7 +16,7 @@ public class EventsGrpcClient : IEventsGrpcClient
     private readonly ILogger<EventsGrpcClient> _logger;
 
     private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(5);
-    private const string ParticipantCacheKeyPrefix = "event_participant_";
+    private const string ParticipantsCacheKeyPrefix = "event_participants_";
     private const string EventContextCacheKeyPrefix = "event_context_";
 
     public EventsGrpcClient(
@@ -50,9 +50,16 @@ public class EventsGrpcClient : IEventsGrpcClient
 
     public async Task<(bool IsParticipant, bool EventExists)> IsEventParticipantAsync(Guid eventId, Guid userId)
     {
-        var cacheKey = $"{ParticipantCacheKeyPrefix}{eventId}_{userId}";
+        var participants = await GetEventParticipantIdsAsync(eventId);
+        // A roster that came back proves the event exists.
+        return (participants.Contains(userId), true);
+    }
 
-        if (_cache.TryGetValue(cacheKey, out (bool IsParticipant, bool EventExists) cached))
+    public async Task<IReadOnlySet<Guid>> GetEventParticipantIdsAsync(Guid eventId)
+    {
+        var cacheKey = $"{ParticipantsCacheKeyPrefix}{eventId}";
+
+        if (_cache.TryGetValue(cacheKey, out IReadOnlySet<Guid>? cached) && cached != null)
             return cached;
 
         try
@@ -62,17 +69,13 @@ public class EventsGrpcClient : IEventsGrpcClient
                 EventId = eventId.ToString()
             });
 
-            var eventExists = true; // If the call succeeds, event exists
-            var isParticipant = response.Participants.Any(p => p.UserId == userId.ToString());
-
-            var result = (isParticipant, eventExists);
-            _cache.Set(cacheKey, result, CacheDuration);
-            return result;
+            var participants = response.Participants.Select(p => Guid.Parse(p.UserId)).ToHashSet();
+            _cache.Set(cacheKey, participants, CacheDuration);
+            return participants;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to check event participant status via gRPC for event {EventId}, user {UserId}",
-                eventId, userId);
+            _logger.LogError(ex, "Failed to fetch event participants via gRPC for event {EventId}", eventId);
             throw;
         }
     }

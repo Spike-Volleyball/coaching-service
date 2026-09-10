@@ -59,17 +59,34 @@ public class FeedbackController : Shared.Microservices.Controllers.BaseApiContro
     {
         CheckIsUserLoggedIn();
 
-        var request = new CreateFeedbackDto
-        {
-            RecipientUserId = recipientUserId,
-            EventId = eventId,
-            ClubId = clubId,
-            ContextType = contextType,
-            ContextId = contextId
-        };
+        var eligible = await _authorizationService.GetEligibleRecipientsAsync(
+            new FeedbackScope(eventId, clubId, contextType, contextId),
+            [recipientUserId],
+            JwtPayload.UserId);
+        return Ok(new { canCreate = eligible.Contains(recipientUserId) });
+    }
 
-        var canCreate = await _authorizationService.CanCreateAsync(request, JwtPayload.UserId);
-        return Ok(new { canCreate });
+    /// <summary>
+    /// The same question for a whole roster at once, answered with the recipients the current
+    /// user may give feedback to. One request per member list rather than one per member: the
+    /// caller's standing and the roster are resolved once and every recipient is judged against
+    /// them. Repeat recipientUserIds in the query; at most 100 distinct ids per request.
+    /// </summary>
+    [HttpGet("feedback/can-create/batch")]
+    public async Task<IActionResult> CanCreateBatch(
+        [FromQuery] Guid[] recipientUserIds,
+        [FromQuery] Guid? eventId = null,
+        [FromQuery] Guid? clubId = null,
+        [FromQuery] ContextType? contextType = null,
+        [FromQuery] Guid? contextId = null)
+    {
+        CheckIsUserLoggedIn();
+
+        var eligibleRecipientIds = await _authorizationService.GetEligibleRecipientsAsync(
+            new FeedbackScope(eventId, clubId, contextType, contextId),
+            recipientUserIds,
+            JwtPayload.UserId);
+        return Ok(new { eligibleRecipientIds });
     }
 
     [HttpGet("me/feedback/received")]

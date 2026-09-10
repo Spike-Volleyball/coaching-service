@@ -58,9 +58,17 @@ public interface IClubsGrpcClient
     Task<bool> CanGiveFeedbackInUnitAsync(Guid userId, ContextType contextType, Guid contextId);
 
     /// <summary>
-    /// Check whether a user belongs to one team or group.
+    /// The user ids of a club's active members, any role. Empty when the club is unknown or
+    /// clubs-service could not answer, so a caller treats "not on the list" as "not a member".
     /// </summary>
-    Task<bool> IsUserUnitMemberAsync(Guid userId, ContextType contextType, Guid contextId);
+    Task<IReadOnlySet<Guid>> GetClubMemberIdsAsync(Guid clubId);
+
+    /// <summary>
+    /// The user ids holding a row on one team or group — the people its coaches coach. Club
+    /// staff who oversee the unit without a row on it are not on this list. Empty when the unit
+    /// is unknown or clubs-service could not answer.
+    /// </summary>
+    Task<IReadOnlySet<Guid>> GetUnitMemberIdsAsync(ContextType contextType, Guid contextId);
 
     /// <summary>
     /// Whether a user is staff of a club — someone who runs or coaches it, rather than plays for it.
