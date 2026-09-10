@@ -24,6 +24,12 @@ public interface IEventsGrpcClient
     Task<(bool IsParticipant, bool EventExists)> IsEventParticipantAsync(Guid eventId, Guid userId);
 
     /// <summary>
+    /// The user ids on an event's roster. One call answers for every recipient a screen asks
+    /// about, which is what the feedback can-create batch relies on.
+    /// </summary>
+    Task<IReadOnlySet<Guid>> GetEventParticipantIdsAsync(Guid eventId);
+
+    /// <summary>
     /// Get the context of an event (type, context type, context ID) for authorization.
     /// Returns null if the event does not exist.
     /// </summary>

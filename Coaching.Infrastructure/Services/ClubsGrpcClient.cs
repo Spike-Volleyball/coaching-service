@@ -164,11 +164,55 @@ public class ClubsGrpcClient : IClubsGrpcClient
             && response.Roles.Any(FeedbackGivingUnitRoles.Contains);
     }
 
-    public async Task<bool> IsUserUnitMemberAsync(Guid userId, ContextType contextType, Guid contextId)
+    public async Task<IReadOnlySet<Guid>> GetClubMemberIdsAsync(Guid clubId)
     {
-        var response = await GetUnitMembershipAsync(userId, contextType, contextId);
-        return response?.IsMember ?? false;
+        try
+        {
+            var response = await _grpcClient.GetClubMembersAsync(new GetClubMembersRequest
+            {
+                ClubId = clubId.ToString(),
+                Audience = Shared.Contracts.Grpc.Audience.Members
+            });
+            return UserIdsOf(response.Members);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to fetch club members via gRPC for club {ClubId}", clubId);
+            return new HashSet<Guid>();
+        }
     }
+
+    public async Task<IReadOnlySet<Guid>> GetUnitMemberIdsAsync(ContextType contextType, Guid contextId)
+    {
+        try
+        {
+            var members = contextType switch
+            {
+                ContextType.Team => (await _grpcClient.GetTeamMembersAsync(new GetTeamMembersRequest
+                {
+                    TeamId = contextId.ToString(),
+                    Audience = Shared.Contracts.Grpc.Audience.Members
+                })).Members,
+                ContextType.Group => (await _grpcClient.GetGroupMembersAsync(new GetGroupMembersRequest
+                {
+                    GroupId = contextId.ToString(),
+                    Audience = Shared.Contracts.Grpc.Audience.Members
+                })).Members,
+                _ => throw new ArgumentOutOfRangeException(nameof(contextType), contextType,
+                    "Only teams and groups have a unit roster")
+            };
+            return UserIdsOf(members);
+        }
+        catch (Exception ex) when (ex is not ArgumentOutOfRangeException)
+        {
+            _logger.LogError(ex, "Failed to fetch {ContextType} members via gRPC for context {ContextId}",
+                contextType, contextId);
+            return new HashSet<Guid>();
+        }
+    }
+
+    private static HashSet<Guid> UserIdsOf(IEnumerable<MemberInfo> members) =>
+        members.Select(m => Guid.Parse(m.UserId)).ToHashSet();
 
     public async Task<bool> IsClubStaffAsync(Guid userId, Guid clubId)
     {
