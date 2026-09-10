@@ -79,6 +79,48 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
     }
 
     [Test]
+    public async Task ValidateCreateAsync_EventLinkedClubEvent_CoachOfAnotherClub_ThrowsForbidden()
+    {
+        // Arrange
+        var otherClubId = Guid.NewGuid();
+        var request = new CreateFeedbackDto { RecipientUserId = PlayerId, EventId = EventId };
+        _eventsClient.GetEventContextAsync(EventId)
+            .Returns(new EventContext("TrainingSession", "Club", ClubId));
+        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster(PlayerId));
+        _clubsClient.CanGiveFeedbackInClubAsync(CoachId, otherClubId).Returns(true);
+        _clubsClient.CanGiveFeedbackInClubAsync(CoachId, ClubId).Returns(false);
+
+        // Act
+        var act = () => _sut.ValidateCreateAsync(request, CoachId);
+
+        // Assert
+        await act.Should().ThrowAsync<ForbiddenException>()
+            .WithMessage("*coaches*club*");
+        await _clubsClient.Received(1).CanGiveFeedbackInClubAsync(CoachId, ClubId);
+    }
+
+    [Test]
+    public async Task ValidateCreateAsync_EventLinkedClubEvent_EventAdminWithNoClubRole_ThrowsForbidden()
+    {
+        // Arrange — a club event is judged by the club role alone; organising the session does
+        // not make somebody the club's coach.
+        var request = new CreateFeedbackDto { RecipientUserId = PlayerId, EventId = EventId };
+        _eventsClient.GetEventContextAsync(EventId)
+            .Returns(new EventContext("TrainingSession", "Club", ClubId));
+        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster(PlayerId));
+        _eventsClient.IsEventAdminAsync(EventId, CoachId).Returns(true);
+        _clubsClient.CanGiveFeedbackInClubAsync(CoachId, ClubId).Returns(false);
+
+        // Act
+        var act = () => _sut.ValidateCreateAsync(request, CoachId);
+
+        // Assert
+        await act.Should().ThrowAsync<ForbiddenException>()
+            .WithMessage("*coaches*club*");
+        await _eventsClient.DidNotReceiveWithAnyArgs().IsEventAdminAsync(default, default);
+    }
+
+    [Test]
     public async Task ValidateCreateAsync_EventLinkedNonClub_EventAdmin_ReturnsNull()
     {
         // Arrange
@@ -284,6 +326,54 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
 
         // Assert
         await act.Should().NotThrowAsync();
+    }
+
+    [TestCase(ContextType.Team)]
+    [TestCase(ContextType.Group)]
+    public async Task ValidateCreateAsync_EventLinkedUnitEvent_CoachOfAnotherClub_ThrowsForbidden(ContextType unitType)
+    {
+        // Arrange
+        var unitId = Guid.NewGuid();
+        var otherClubId = Guid.NewGuid();
+        var request = new CreateFeedbackDto { RecipientUserId = PlayerId, EventId = EventId };
+        _eventsClient.GetEventContextAsync(EventId)
+            .Returns(new EventContext("Match", unitType.ToString(), unitId));
+        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster(PlayerId));
+        _eventsClient.IsEventAdminAsync(EventId, CoachId).Returns(false);
+        _clubsClient.ResolveClubIdAsync(unitType, unitId).Returns(ClubId);
+        _clubsClient.CanGiveFeedbackInUnitAsync(CoachId, unitType, unitId).Returns(false);
+        _clubsClient.CanGiveFeedbackInClubAsync(CoachId, otherClubId).Returns(true);
+        _clubsClient.CanGiveFeedbackInClubAsync(CoachId, ClubId).Returns(false);
+
+        // Act
+        var act = () => _sut.ValidateCreateAsync(request, CoachId);
+
+        // Assert
+        await act.Should().ThrowAsync<ForbiddenException>()
+            .WithMessage("*organizers*admins*");
+        await _clubsClient.Received(1).CanGiveFeedbackInClubAsync(CoachId, ClubId);
+    }
+
+    [TestCase(ContextType.Team)]
+    [TestCase(ContextType.Group)]
+    public async Task ValidateCreateAsync_EventLinkedUnitEvent_EventAdminWithNoRoleAnywhere_IsAdmitted(ContextType unitType)
+    {
+        // Arrange
+        var unitId = Guid.NewGuid();
+        var request = new CreateFeedbackDto { RecipientUserId = PlayerId, EventId = EventId };
+        _eventsClient.GetEventContextAsync(EventId)
+            .Returns(new EventContext("Match", unitType.ToString(), unitId));
+        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster(PlayerId));
+        _eventsClient.IsEventAdminAsync(EventId, CoachId).Returns(true);
+        _clubsClient.ResolveClubIdAsync(unitType, unitId).Returns(ClubId);
+        _clubsClient.CanGiveFeedbackInUnitAsync(CoachId, unitType, unitId).Returns(false);
+        _clubsClient.CanGiveFeedbackInClubAsync(CoachId, ClubId).Returns(false);
+
+        // Act
+        var resolvedClubId = await _sut.ValidateCreateAsync(request, CoachId);
+
+        // Assert
+        resolvedClubId.Should().BeNull();
     }
 
     [Test]

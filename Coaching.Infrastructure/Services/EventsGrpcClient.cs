@@ -7,7 +7,7 @@ namespace Coaching.Infrastructure.Services;
 
 /// <summary>
 /// gRPC client for events-service authorization checks with in-memory caching.
-/// An event's roster is cached for 5 minutes to reduce cross-service calls.
+/// An event's roster and its context are cached for 5 minutes to reduce cross-service calls.
 /// </summary>
 public class EventsGrpcClient : IEventsGrpcClient
 {
@@ -84,26 +84,30 @@ public class EventsGrpcClient : IEventsGrpcClient
     {
         var cacheKey = $"{EventContextCacheKeyPrefix}{eventId}";
 
-        if (_cache.TryGetValue(cacheKey, out EventContext? cachedContext))
-            return cachedContext;
+        if (_cache.TryGetValue(cacheKey, out EventContext? cached) && cached != null)
+            return cached;
 
         try
         {
-            // The current events gRPC proto does not expose event type or context fields.
-            // Use IsEventAdmin as a lightweight probe to confirm the event exists, then
-            // return a permissive default context so callers can still function.
-            // TODO: extend events.proto with a GetEventContext RPC and update this implementation.
-            _logger.LogWarning("GetEventContextAsync is not fully supported by the current events.proto - " +
-                               "returning default context for event {EventId}", eventId);
+            var response = await _grpcClient.GetEventContextAsync(new GetEventContextRequest
+            {
+                EventId = eventId.ToString()
+            });
 
-            var context = new EventContext("TrainingSession", "None", null);
+            if (!response.Found)
+                return null;
+
+            var context = new EventContext(
+                response.EventType,
+                response.ContextType,
+                Guid.TryParse(response.ContextId, out var contextId) ? contextId : null);
             _cache.Set(cacheKey, context, CacheDuration);
             return context;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to get event context via gRPC for event {EventId}", eventId);
-            return null;
+            throw;
         }
     }
 }
