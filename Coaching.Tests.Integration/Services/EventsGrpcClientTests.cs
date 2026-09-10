@@ -13,7 +13,8 @@ namespace Coaching.Tests.Integration.Services;
 /// <summary>
 /// GetEventContext shipped as a stub that answered "TrainingSession / None" for every event
 /// without asking events-service, so the club and unit branches of the feedback rules were
-/// unreachable on every environment. These pin the real call and its mapping.
+/// unreachable on every environment. These pin the real call and its mapping, and the page-wide
+/// summary call the feedback lists are built from.
 /// </summary>
 [TestFixture]
 [Category("Unit")]
@@ -165,6 +166,93 @@ public class EventsGrpcClientTests
 
         // Assert
         await act.Should().ThrowAsync<RpcException>();
+    }
+
+    [Test]
+    public async Task GetEventInfoAsync_AsksOnceForTheDistinctIds_AndKeysTheAnswerById()
+    {
+        // Arrange
+        var friday = Guid.NewGuid();
+        var cup = Guid.NewGuid();
+        var grpcClient = Substitute.For<EventsInternalService.EventsInternalServiceClient>();
+        grpcClient.GetEventSummariesAsync(
+                Arg.Any<GetEventSummariesRequest>(),
+                Arg.Any<Metadata>(),
+                Arg.Any<DateTime?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(CompletedCall(Summaries(
+                Summary(friday, "Friday session", "2026-09-11T18:30:00.0000000Z", "TrainingSession"),
+                Summary(cup, "Cup quarter-final", "2026-09-13T14:00:00.0000000Z", "Match"))));
+        var sut = BuildSut(grpcClient);
+
+        // Act
+        var info = await sut.GetEventInfoAsync([friday, cup, friday, Guid.Empty]);
+
+        // Assert
+        info.Should().BeEquivalentTo(new Dictionary<Guid, EventInfo>
+        {
+            [friday] = new(friday, "Friday session", new DateTime(2026, 9, 11, 18, 30, 0, DateTimeKind.Utc), "TrainingSession"),
+            [cup] = new(cup, "Cup quarter-final", new DateTime(2026, 9, 13, 14, 0, 0, DateTimeKind.Utc), "Match"),
+        });
+        info[friday].StartTime.Kind.Should().Be(DateTimeKind.Utc);
+        grpcClient.Received(1).GetEventSummariesAsync(
+            Arg.Is<GetEventSummariesRequest>(r =>
+                r.EventIds.Count == 2
+                && r.EventIds.Contains(friday.ToString())
+                && r.EventIds.Contains(cup.ToString())),
+            Arg.Any<Metadata>(),
+            Arg.Any<DateTime?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetEventInfoAsync_NoIds_AsksNothing()
+    {
+        // Arrange
+        var grpcClient = Substitute.For<EventsInternalService.EventsInternalServiceClient>();
+        var sut = BuildSut(grpcClient);
+
+        // Act
+        var info = await sut.GetEventInfoAsync([Guid.Empty]);
+
+        // Assert
+        info.Should().BeEmpty();
+        grpcClient.DidNotReceiveWithAnyArgs().GetEventSummariesAsync(default!, default!, default, default);
+    }
+
+    [Test]
+    public async Task GetEventInfoAsync_EventsServiceUnreachable_NamesNothing()
+    {
+        // Arrange
+        var grpcClient = Substitute.For<EventsInternalService.EventsInternalServiceClient>();
+        grpcClient.GetEventSummariesAsync(
+                Arg.Any<GetEventSummariesRequest>(),
+                Arg.Any<Metadata>(),
+                Arg.Any<DateTime?>(),
+                Arg.Any<CancellationToken>())
+            .Throws(new RpcException(new Status(StatusCode.Unavailable, "down")));
+        var sut = BuildSut(grpcClient);
+
+        // Act
+        var info = await sut.GetEventInfoAsync([Guid.NewGuid()]);
+
+        // Assert
+        info.Should().BeEmpty();
+    }
+
+    private static EventSummary Summary(Guid eventId, string name, string startTime, string eventType) => new()
+    {
+        EventId = eventId.ToString(),
+        Name = name,
+        StartTime = startTime,
+        EventType = eventType
+    };
+
+    private static GetEventSummariesResponse Summaries(params EventSummary[] summaries)
+    {
+        var response = new GetEventSummariesResponse();
+        response.Events.AddRange(summaries);
+        return response;
     }
 
     private static EventsInternalService.EventsInternalServiceClient GrpcClientAnswering(

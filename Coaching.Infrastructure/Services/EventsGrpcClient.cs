@@ -1,3 +1,4 @@
+using System.Globalization;
 using Coaching.Application.Interfaces.Services;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
@@ -6,7 +7,7 @@ using Shared.Contracts.Grpc;
 namespace Coaching.Infrastructure.Services;
 
 /// <summary>
-/// gRPC client for events-service authorization checks with in-memory caching.
+/// gRPC client for events-service authorization checks and event summaries with in-memory caching.
 /// An event's roster and its context are cached for 5 minutes to reduce cross-service calls.
 /// </summary>
 public class EventsGrpcClient : IEventsGrpcClient
@@ -108,6 +109,35 @@ public class EventsGrpcClient : IEventsGrpcClient
         {
             _logger.LogError(ex, "Failed to get event context via gRPC for event {EventId}", eventId);
             throw;
+        }
+    }
+
+    public async Task<IReadOnlyDictionary<Guid, EventInfo>> GetEventInfoAsync(IReadOnlyCollection<Guid> eventIds)
+    {
+        var ids = eventIds.Where(id => id != Guid.Empty).Distinct().ToList();
+        if (ids.Count == 0)
+            return new Dictionary<Guid, EventInfo>();
+
+        try
+        {
+            var request = new GetEventSummariesRequest();
+            request.EventIds.AddRange(ids.Select(id => id.ToString()));
+            var response = await _grpcClient.GetEventSummariesAsync(request);
+
+            return response.Events.ToDictionary(
+                e => Guid.Parse(e.EventId),
+                e => new EventInfo(
+                    Guid.Parse(e.EventId),
+                    e.Name,
+                    DateTime.Parse(e.StartTime, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                    e.EventType));
+        }
+        catch (Exception ex)
+        {
+            // A list that cannot name its sessions is still a list: a row without a summary is
+            // rendered from the event id by the clients, as every row was before.
+            _logger.LogError(ex, "Failed to fetch summaries for {EventCount} events via gRPC", ids.Count);
+            return new Dictionary<Guid, EventInfo>();
         }
     }
 }
