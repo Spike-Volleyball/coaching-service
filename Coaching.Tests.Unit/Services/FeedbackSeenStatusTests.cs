@@ -43,6 +43,7 @@ public class FeedbackSeenStatusTests : UnitTestBase
             Substitute.For<IRepository<Praise>>(),
             Substitute.For<IRepository<Drill>>(),
             _authorizationService,
+            Substitute.For<IEventsGrpcClient>(),
             Substitute.For<IRepository<UserProfile>>(),
             _mapper,
             Substitute.For<IFileService>(),

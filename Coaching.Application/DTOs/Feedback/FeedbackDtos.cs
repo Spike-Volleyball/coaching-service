@@ -13,6 +13,13 @@ public class FeedbackDto
     public string? CoachName { get; set; }
     public string? CoachImageUrl { get; set; }
     public Guid? EventId { get; set; }
+
+    /// <summary>
+    /// The session this feedback was given at, when events-service could name it. Filled per page
+    /// by the service rather than the mapper; null when the row has no event or the event is gone.
+    /// EventId stays so a client can still open the event, or fetch it, without the summary.
+    /// </summary>
+    public FeedbackEventDto? Event { get; set; }
     public string? Comment { get; set; }
     public bool SharedWithPlayer { get; set; }
     public DateTime? SeenAt { get; set; }
@@ -22,6 +29,14 @@ public class FeedbackDto
     public PraiseDto? Praise { get; set; }
     public DateTime? CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
+}
+
+public class FeedbackEventDto
+{
+    public Guid Id { get; set; }
+    public required string Name { get; set; }
+    public DateTime StartTime { get; set; }
+    public required string Type { get; set; }
 }
 
 public class ImprovementPointDto

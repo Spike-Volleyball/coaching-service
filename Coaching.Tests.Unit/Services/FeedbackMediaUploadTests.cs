@@ -66,6 +66,7 @@ public class FeedbackMediaUploadTests : UnitTestBase
             _praiseRepository,
             _drillRepository,
             _authorizationService,
+            Substitute.For<IEventsGrpcClient>(),
             _userProfileRepository,
             _mapper,
             _fileService,

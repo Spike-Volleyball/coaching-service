@@ -14,6 +14,7 @@ public class FeedbackMappingProfile : Profile
             .ForMember(d => d.RecipientImageUrl, opt => opt.Ignore())
             .ForMember(d => d.CoachName, opt => opt.Ignore())
             .ForMember(d => d.CoachImageUrl, opt => opt.Ignore())
+            .ForMember(d => d.Event, opt => opt.Ignore())
             .ForMember(d => d.Attachments, opt => opt.MapFrom(s => s.Media));
         CreateMap<ImprovementPoint, ImprovementPointDto>()
             .ForMember(d => d.AttachedDrills, opt => opt.MapFrom(s =>
