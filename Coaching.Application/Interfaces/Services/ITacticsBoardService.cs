@@ -13,5 +13,6 @@ public interface ITacticsBoardService
     Task<IReadOnlyList<TacticsFolderDto>> ListFoldersAsync(TacticsShelfQuery query, Guid userId);
     Task<TacticsFolderDto> CreateFolderAsync(CreateTacticsFolderRequest request, Guid userId);
     Task<TacticsFolderDto> RenameFolderAsync(Guid folderId, string name, Guid userId);
+    Task<IReadOnlyList<TacticsFolderDto>> MoveFolderAsync(Guid folderId, MoveTacticsFolderRequest request, Guid userId);
     Task DeleteFolderAsync(Guid folderId, Guid userId);
 }

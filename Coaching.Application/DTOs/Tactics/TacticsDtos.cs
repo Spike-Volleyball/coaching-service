@@ -36,6 +36,10 @@ public class TacticsFolderDto
     public TacticsScope Scope { get; set; }
     public Guid? ClubId { get; set; }
     public Guid? TeamId { get; set; }
+    /// <summary>The folder this one sits inside, or null at the top level of its shelf.</summary>
+    public Guid? ParentFolderId { get; set; }
+    /// <summary>Where it sits among its siblings. Dense from zero.</summary>
+    public int Position { get; set; }
     public DateTime UpdatedAt { get; set; }
 }
 
@@ -94,9 +98,24 @@ public record CreateTacticsFolderRequest
     public Guid? ClubId { get; init; }
     public Guid? TeamId { get; init; }
     public string Name { get; init; } = string.Empty;
+    /// <summary>Where to file it. Absent puts it at the top level, last among its siblings.</summary>
+    public Guid? ParentFolderId { get; init; }
 }
 
 public record RenameTacticsFolderRequest
 {
     public string Name { get; init; } = string.Empty;
+}
+
+/// <summary>
+/// Where a folder now sits: inside <see cref="ParentFolderId"/> (null for the top level) at
+/// <see cref="Position"/> among its siblings.
+///
+/// Kept apart from the rename so that null means "the top level" rather than "leave it alone" —
+/// one partial-update body could not say both.
+/// </summary>
+public record MoveTacticsFolderRequest
+{
+    public Guid? ParentFolderId { get; init; }
+    public int Position { get; init; }
 }

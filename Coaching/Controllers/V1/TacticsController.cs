@@ -81,6 +81,17 @@ public class TacticsController : Shared.Microservices.Controllers.BaseApiControl
         return Ok(await _tactics.RenameFolderAsync(id, request.Name, JwtPayload!.UserId));
     }
 
+    /// <summary>
+    /// Where a folder now sits. Returns the whole shelf's folders: one move renumbers two rows of
+    /// siblings, and a client told only about the one it dragged would draw the rest wrong.
+    /// </summary>
+    [HttpPut("tactics-folders/{id:guid}/placement")]
+    public async Task<IActionResult> MoveFolder([FromRoute] Guid id, [FromBody] MoveTacticsFolderRequest request)
+    {
+        CheckIsUserLoggedIn();
+        return Ok(await _tactics.MoveFolderAsync(id, request, JwtPayload!.UserId));
+    }
+
     [HttpDelete("tactics-folders/{id:guid}")]
     public async Task<IActionResult> DeleteFolder([FromRoute] Guid id)
     {
