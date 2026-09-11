@@ -42,7 +42,8 @@ public class TacticsControllerTests
         int FrameCount, int Version, DateTime UpdatedAt, string? Document);
 
     private sealed record FolderResponse(
-        Guid Id, string Name, string Scope, Guid? ClubId, Guid? TeamId, DateTime UpdatedAt);
+        Guid Id, string Name, string Scope, Guid? ClubId, Guid? TeamId,
+        Guid? ParentFolderId, int Position, DateTime UpdatedAt);
 
     [OneTimeSetUp]
     public async Task OneTimeSetUp()
@@ -372,6 +373,158 @@ public class TacticsControllerTests
     }
 
     [Test]
+    public async Task CreateFolder_AppendsEachOneAfterTheLast()
+    {
+        // Arrange — the order a coach made them in is the order they read back in, not alphabetical.
+        SetAuth(Guid.NewGuid());
+
+        // Act
+        await CreateFolderAsync("Warmups");
+        await CreateFolderAsync("Blocking");
+        await CreateFolderAsync("Serve receive");
+
+        // Assert
+        var listed = await _client.GetFromJsonAsync<List<FolderResponse>>("/v1/tactics-folders?scope=personal", JsonOptions);
+        listed!.Select(f => f.Name).Should().Equal("Warmups", "Blocking", "Serve receive");
+        listed.Select(f => f.Position).Should().Equal(0, 1, 2);
+    }
+
+    [Test]
+    public async Task MoveFolder_ReordersItsSiblingsAndReturnsTheWholeShelf()
+    {
+        // Arrange
+        SetAuth(Guid.NewGuid());
+        await CreateFolderAsync("Warmups");
+        await CreateFolderAsync("Blocking");
+        var third = await CreateFolderAsync("Serve receive");
+
+        // Act — drag the last one to the front.
+        var shelf = await MoveFolderAsync(third.Id, null, 0);
+
+        // Assert — positions are dense, so "first" is always 0.
+        shelf.Select(f => f.Name).Should().Equal("Serve receive", "Warmups", "Blocking");
+        shelf.Select(f => f.Position).Should().Equal(0, 1, 2);
+    }
+
+    [Test]
+    public async Task MoveFolder_IntoAnother_NestsIt()
+    {
+        // Arrange
+        SetAuth(Guid.NewGuid());
+        var season = await CreateFolderAsync("Season 26");
+        var blocking = await CreateFolderAsync("Blocking");
+
+        // Act
+        var shelf = await MoveFolderAsync(blocking.Id, season.Id, 0);
+
+        // Assert
+        shelf.Single(f => f.Id == blocking.Id).ParentFolderId.Should().Be(season.Id);
+        // Leaving the top level renumbers what is left there.
+        shelf.Single(f => f.Id == season.Id).Position.Should().Be(0);
+    }
+
+    [Test]
+    public async Task MoveFolder_IntoItself_ReturnsBadRequest()
+    {
+        // Arrange
+        SetAuth(Guid.NewGuid());
+        var folder = await CreateFolderAsync("Season 26");
+
+        // Act
+        var response = await _client.PutAsJsonAsync(
+            $"/v1/tactics-folders/{folder.Id}/placement", new { parentFolderId = folder.Id, position = 0 }, JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Test]
+    public async Task MoveFolder_IntoItsOwnChild_ReturnsBadRequest()
+    {
+        // Arrange — the move would cut the subtree loose from the shelf entirely.
+        SetAuth(Guid.NewGuid());
+        var season = await CreateFolderAsync("Season 26");
+        var blocking = await CreateFolderAsync("Blocking", season.Id);
+
+        // Act
+        var response = await _client.PutAsJsonAsync(
+            $"/v1/tactics-folders/{season.Id}/placement", new { parentFolderId = blocking.Id, position = 0 }, JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Test]
+    public async Task MoveFolder_DeeperThanTheCap_ReturnsBadRequest()
+    {
+        // Arrange — three levels is as deep as the rail can indent and still read.
+        SetAuth(Guid.NewGuid());
+        var one = await CreateFolderAsync("One");
+        var two = await CreateFolderAsync("Two", one.Id);
+        var three = await CreateFolderAsync("Three", two.Id);
+        var four = await CreateFolderAsync("Four");
+
+        // Act
+        var response = await _client.PutAsJsonAsync(
+            $"/v1/tactics-folders/{four.Id}/placement", new { parentFolderId = three.Id, position = 0 }, JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Test]
+    public async Task MoveFolder_ASubtreeThatWouldNotFit_ReturnsBadRequest()
+    {
+        // Arrange — the folder being dragged fits, but what is filed under it does not.
+        SetAuth(Guid.NewGuid());
+        var one = await CreateFolderAsync("One");
+        var two = await CreateFolderAsync("Two", one.Id);
+        var tall = await CreateFolderAsync("Tall");
+        await CreateFolderAsync("Under it", tall.Id);
+
+        // Act
+        var response = await _client.PutAsJsonAsync(
+            $"/v1/tactics-folders/{tall.Id}/placement", new { parentFolderId = two.Id, position = 0 }, JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Test]
+    public async Task DeleteFolder_PromotesTheFoldersInsideItRatherThanTakingThemWithIt()
+    {
+        // Arrange
+        SetAuth(Guid.NewGuid());
+        var season = await CreateFolderAsync("Season 26");
+        var blocking = await CreateFolderAsync("Blocking", season.Id);
+
+        // Act
+        var response = await _client.DeleteAsync($"/v1/tactics-folders/{season.Id}");
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        var listed = await _client.GetFromJsonAsync<List<FolderResponse>>("/v1/tactics-folders?scope=personal", JsonOptions);
+        listed.Should().ContainSingle().Which.Id.Should().Be(blocking.Id);
+        listed![0].ParentFolderId.Should().BeNull();
+    }
+
+    [Test]
+    public async Task MoveFolder_SomebodyElsesPersonalFolder_ReturnsForbidden()
+    {
+        // Arrange
+        SetAuth(Guid.NewGuid());
+        var folder = await CreateFolderAsync("Match day");
+
+        // Act
+        SetAuth(Guid.NewGuid());
+        var response = await _client.PutAsJsonAsync(
+            $"/v1/tactics-folders/{folder.Id}/placement", new { parentFolderId = (Guid?)null, position = 0 }, JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Test]
     public async Task DeleteFolder_LeavesTheBoardsFiledInItOnTheShelf()
     {
         // Arrange — losing a folder must never lose the work inside it.
@@ -512,12 +665,20 @@ public class TacticsControllerTests
         }).ToArray()
     };
 
-    private async Task<FolderResponse> CreateFolderAsync(string name)
+    private async Task<FolderResponse> CreateFolderAsync(string name, Guid? parentFolderId = null)
     {
         var response = await _client.PostAsJsonAsync(
-            "/v1/tactics-folders", new { scope = "personal", name }, JsonOptions);
+            "/v1/tactics-folders", new { scope = "personal", name, parentFolderId }, JsonOptions);
         response.StatusCode.Should().Be(HttpStatusCode.Created);
         return (await response.Content.ReadFromJsonAsync<FolderResponse>(JsonOptions))!;
+    }
+
+    private async Task<List<FolderResponse>> MoveFolderAsync(Guid folderId, Guid? parentFolderId, int position)
+    {
+        var response = await _client.PutAsJsonAsync(
+            $"/v1/tactics-folders/{folderId}/placement", new { parentFolderId, position }, JsonOptions);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        return (await response.Content.ReadFromJsonAsync<List<FolderResponse>>(JsonOptions))!;
     }
 
     private async Task SaveAsync(Guid boardId, object request)

@@ -150,9 +150,11 @@ public class TacticsBoardService(
         var shelf = await TacticsAccess.EnsureMayUseAsync(
             TacticsAccess.ShelfOf(query.Scope, query.ClubId, query.TeamId), userId, clubs);
 
+        // Position first: a season's filing is a shape the coach chose, and alphabetical is not it.
+        // Name breaks ties, so folders made before ordering existed still come back in a fixed order.
         return await folders.QueryNoTracking()
             .Where(FolderOnShelf(shelf, userId))
-            .OrderBy(f => f.Name)
+            .OrderBy(f => f.Position).ThenBy(f => f.Name)
             .Select(FolderProjection)
             .ToListAsync();
     }
@@ -163,13 +165,23 @@ public class TacticsBoardService(
         var shelf = await TacticsAccess.EnsureMayUseAsync(
             TacticsAccess.ShelfOf(request.Scope, request.ClubId, request.TeamId), userId, clubs);
 
+        var siblings = await SiblingsAsync(shelf, userId, request.ParentFolderId);
+        if (request.ParentFolderId is { } parentId)
+        {
+            var parent = await OnThisShelfAsync(parentId, shelf, userId);
+            if (await DepthOfAsync(parent) >= TacticsFolder.MaxDepth)
+                throw TooDeep();
+        }
+
         var folder = new TacticsFolder
         {
             Name = name,
             Scope = shelf.Scope,
             ClubId = shelf.ClubId,
             TeamId = shelf.TeamId,
-            OwnerUserId = userId
+            OwnerUserId = userId,
+            ParentFolderId = request.ParentFolderId,
+            Position = siblings.Count
         };
 
         folders.Add(folder);
@@ -193,10 +205,137 @@ public class TacticsBoardService(
         var folder = await folders.GetByIdAsync(folderId) ?? throw NoFolder();
         await TacticsAccess.EnsureMayOpenAsync(folder, userId, clubs);
 
-        // The boards filed in it stay on the shelf, unfiled — losing a folder should never lose work.
+        // The boards filed in it stay on the shelf, unfiled, and the folders inside it move up to
+        // where it was — losing a folder should never lose the work filed under it.
+        var children = await folders.Query().Where(f => f.ParentFolderId == folder.Id).ToListAsync();
+        var newSiblings = await folders.Query()
+            .Where(f => f.ParentFolderId == folder.ParentFolderId && f.Id != folder.Id)
+            .OrderBy(f => f.Position).ThenBy(f => f.Name)
+            .ToListAsync();
+
+        foreach (var child in children)
+            child.ParentFolderId = folder.ParentFolderId;
+
+        // The promoted children take the departing folder's place rather than landing at the end.
+        var order = newSiblings.Where(f => f.Position < folder.Position)
+            .Concat(children)
+            .Concat(newSiblings.Where(f => f.Position >= folder.Position))
+            .ToList();
+        Reindex(order);
+
         folders.Delete(folder);
         await folders.SaveChangesAsync();
     }
+
+    /// <summary>
+    /// Put a folder inside another, or back at the top level, at a chosen place among its siblings.
+    ///
+    /// Returns every folder on the shelf, because one move rewrites the positions of two rows of
+    /// siblings and a client that only heard about the folder it dragged would draw the rest wrong.
+    /// </summary>
+    public async Task<IReadOnlyList<TacticsFolderDto>> MoveFolderAsync(Guid folderId, MoveTacticsFolderRequest request, Guid userId)
+    {
+        var folder = await folders.GetByIdAsync(folderId) ?? throw NoFolder();
+        await TacticsAccess.EnsureMayOpenAsync(folder, userId, clubs);
+        var shelf = TacticsAccess.ShelfOf(folder);
+
+        if (request.ParentFolderId is { } parentId)
+        {
+            if (parentId == folder.Id)
+                throw new BadRequestException("A folder cannot be filed inside itself", ErrorCodeEnum.ValidationError);
+
+            var parent = await OnThisShelfAsync(parentId, shelf, userId);
+            // Walking up from the target is the cycle check: if this folder is one of the target's
+            // ancestors, the move would cut the subtree loose from the shelf entirely.
+            if (await IsDescendantAsync(parent, folder.Id))
+                throw new BadRequestException("A folder cannot be filed inside one of its own folders", ErrorCodeEnum.ValidationError);
+
+            // The whole subtree has to fit, not just the folder being dragged.
+            if (await DepthOfAsync(parent) + await HeightOfAsync(folder.Id) > TacticsFolder.MaxDepth)
+                throw TooDeep();
+        }
+
+        var siblings = await folders.Query()
+            .Where(f => f.ParentFolderId == request.ParentFolderId && f.Id != folder.Id)
+            .Where(FolderOnShelf(shelf, userId))
+            .OrderBy(f => f.Position).ThenBy(f => f.Name)
+            .ToListAsync();
+
+        folder.ParentFolderId = request.ParentFolderId;
+        var at = Math.Clamp(request.Position, 0, siblings.Count);
+        siblings.Insert(at, folder);
+        Reindex(siblings);
+
+        await folders.SaveChangesAsync();
+        return await ListFoldersAsync(new TacticsShelfQuery { Scope = shelf.Scope, ClubId = shelf.ClubId, TeamId = shelf.TeamId }, userId);
+    }
+
+    /// <summary>Dense from zero, so "third in the list" is always Position 2.</summary>
+    private static void Reindex(IReadOnlyList<TacticsFolder> ordered)
+    {
+        for (var i = 0; i < ordered.Count; i++)
+            ordered[i].Position = i;
+    }
+
+    private async Task<List<TacticsFolder>> SiblingsAsync(TacticsShelf shelf, Guid userId, Guid? parentId) =>
+        await folders.QueryNoTracking()
+            .Where(FolderOnShelf(shelf, userId))
+            .Where(f => f.ParentFolderId == parentId)
+            .ToListAsync();
+
+    private async Task<TacticsFolder> OnThisShelfAsync(Guid folderId, TacticsShelf shelf, Guid userId)
+    {
+        var folder = await folders.QueryNoTracking()
+            .Where(FolderOnShelf(shelf, userId))
+            .FirstOrDefaultAsync(f => f.Id == folderId);
+
+        return folder ?? throw new BadRequestException("That folder is not on this shelf", ErrorCodeEnum.ValidationError);
+    }
+
+    /// <summary>How many levels down this folder sits, counting itself. Top level is 1.</summary>
+    private async Task<int> DepthOfAsync(TacticsFolder folder)
+    {
+        var depth = 1;
+        var parentId = folder.ParentFolderId;
+        // Bounded by the depth cap rather than by trust: a cycle already in the data would
+        // otherwise walk forever.
+        while (parentId is { } id && depth <= TacticsFolder.MaxDepth)
+        {
+            parentId = await folders.QueryNoTracking().Where(f => f.Id == id).Select(f => f.ParentFolderId).FirstOrDefaultAsync();
+            depth++;
+        }
+        return depth;
+    }
+
+    /// <summary>How many levels the subtree under this folder stands, counting the folder itself.</summary>
+    private async Task<int> HeightOfAsync(Guid folderId)
+    {
+        var height = 1;
+        var level = new List<Guid> { folderId };
+        while (level.Count > 0 && height <= TacticsFolder.MaxDepth)
+        {
+            level = await folders.QueryNoTracking()
+                .Where(f => f.ParentFolderId != null && level.Contains(f.ParentFolderId.Value))
+                .Select(f => f.Id)
+                .ToListAsync();
+            if (level.Count > 0) height++;
+        }
+        return height;
+    }
+
+    private async Task<bool> IsDescendantAsync(TacticsFolder candidate, Guid ancestorId)
+    {
+        var parentId = candidate.ParentFolderId;
+        for (var step = 0; parentId is { } id && step <= TacticsFolder.MaxDepth; step++)
+        {
+            if (id == ancestorId) return true;
+            parentId = await folders.QueryNoTracking().Where(f => f.Id == id).Select(f => f.ParentFolderId).FirstOrDefaultAsync();
+        }
+        return false;
+    }
+
+    private static BadRequestException TooDeep() =>
+        new($"Folders nest {TacticsFolder.MaxDepth} deep at most", ErrorCodeEnum.ValidationError);
 
     /// <summary>
     /// Filing a board is only allowed into a folder on the same shelf, so a club board cannot be
@@ -259,6 +398,8 @@ public class TacticsBoardService(
         Scope = folder.Scope,
         ClubId = folder.ClubId,
         TeamId = folder.TeamId,
+        ParentFolderId = folder.ParentFolderId,
+        Position = folder.Position,
         UpdatedAt = folder.UpdatedAt ?? folder.CreatedAt ?? DateTime.MinValue
     };
 
