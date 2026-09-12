@@ -1,4 +1,4 @@
-using Coaching.Application.Interfaces.Services;
+﻿using Coaching.Application.Interfaces.Services;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using Shared.Contracts.Grpc;
@@ -34,6 +34,16 @@ public class ClubsGrpcClient : IClubsGrpcClient
     // runs the unit's logistics without coaching it, and a Helper was never authority at all.
     private static readonly HashSet<string> FeedbackGivingUnitRoles =
         new(StringComparer.OrdinalIgnoreCase) { "Coach", "AssistantCoach" };
+
+    // Who may read a club's or a team's coaching material. Separate from the feedback sets above
+    // because they answer a different question: feedback is about appraising a player, and this is
+    // about running the side. A Manager or team Admin belongs here and not there; a Helper in
+    // neither. Same caveat as the sets above — replace with the permission once the wire carries it.
+    private static readonly HashSet<string> ClubStaffRoles =
+        new(StringComparer.OrdinalIgnoreCase) { "Owner", "Admin", "HeadCoach", "Coach" };
+
+    private static readonly HashSet<string> UnitStaffRoles =
+        new(StringComparer.OrdinalIgnoreCase) { "Coach", "AssistantCoach", "Manager", "Admin" };
 
     public ClubsGrpcClient(
         ClubsInternalService.ClubsInternalServiceClient grpcClient,
@@ -154,10 +164,70 @@ public class ClubsGrpcClient : IClubsGrpcClient
             && response.Roles.Any(FeedbackGivingUnitRoles.Contains);
     }
 
-    public async Task<bool> IsUserUnitMemberAsync(Guid userId, ContextType contextType, Guid contextId)
+    public async Task<IReadOnlySet<Guid>> GetClubMemberIdsAsync(Guid clubId)
+    {
+        try
+        {
+            var response = await _grpcClient.GetClubMembersAsync(new GetClubMembersRequest
+            {
+                ClubId = clubId.ToString(),
+                Audience = Shared.Contracts.Grpc.Audience.Members
+            });
+            return UserIdsOf(response.Members);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to fetch club members via gRPC for club {ClubId}", clubId);
+            return new HashSet<Guid>();
+        }
+    }
+
+    public async Task<IReadOnlySet<Guid>> GetUnitMemberIdsAsync(ContextType contextType, Guid contextId)
+    {
+        try
+        {
+            var members = contextType switch
+            {
+                ContextType.Team => (await _grpcClient.GetTeamMembersAsync(new GetTeamMembersRequest
+                {
+                    TeamId = contextId.ToString(),
+                    Audience = Shared.Contracts.Grpc.Audience.Members
+                })).Members,
+                ContextType.Group => (await _grpcClient.GetGroupMembersAsync(new GetGroupMembersRequest
+                {
+                    GroupId = contextId.ToString(),
+                    Audience = Shared.Contracts.Grpc.Audience.Members
+                })).Members,
+                _ => throw new ArgumentOutOfRangeException(nameof(contextType), contextType,
+                    "Only teams and groups have a unit roster")
+            };
+            return UserIdsOf(members);
+        }
+        catch (Exception ex) when (ex is not ArgumentOutOfRangeException)
+        {
+            _logger.LogError(ex, "Failed to fetch {ContextType} members via gRPC for context {ContextId}",
+                contextType, contextId);
+            return new HashSet<Guid>();
+        }
+    }
+
+    private static HashSet<Guid> UserIdsOf(IEnumerable<MemberInfo> members) =>
+        members.Select(m => Guid.Parse(m.UserId)).ToHashSet();
+
+    public async Task<bool> IsClubStaffAsync(Guid userId, Guid clubId)
+    {
+        var response = await CheckClubRolesAsync(userId, clubId);
+        return response != null
+            && response.IsMember
+            && response.Roles.Any(ClubStaffRoles.Contains);
+    }
+
+    public async Task<bool> IsUnitStaffAsync(Guid userId, ContextType contextType, Guid contextId)
     {
         var response = await GetUnitMembershipAsync(userId, contextType, contextId);
-        return response?.IsMember ?? false;
+        return response != null
+            && response.IsMember
+            && response.Roles.Any(UnitStaffRoles.Contains);
     }
 
     public async Task<Guid?> ResolveClubIdAsync(ContextType contextType, Guid contextId)

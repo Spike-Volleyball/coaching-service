@@ -26,6 +26,7 @@ public class FeedbackService(
     IRepository<Praise> praiseRepository,
     IRepository<Coaching.Domain.Models.Drills.Drill> drillRepository,
     IFeedbackAuthorizationService authorizationService,
+    IEventsGrpcClient eventsClient,
     IRepository<UserProfile> userProfileRepository,
     IMapper mapper,
     IFileService fileService,
@@ -191,7 +192,7 @@ public class FeedbackService(
         }
 
         var dto = mapper.Map<FeedbackDto>(feedback);
-        await EnrichWithProfilesAsync(dto);
+        await EnrichAsync(dto);
         return dto;
     }
 
@@ -266,8 +267,8 @@ public class FeedbackService(
             f.CoachUserId == requestingUserId ||
             (f.RecipientUserId == requestingUserId && f.SharedWithPlayer));
 
-        var items = mapper.Map<IEnumerable<FeedbackDto>>(accessible);
-        await EnrichWithProfilesAsync(items);
+        var items = mapper.Map<List<FeedbackDto>>(accessible);
+        await EnrichAsync(items);
         return items;
     }
 
@@ -277,8 +278,8 @@ public class FeedbackService(
         var total = await feedbackRepository.Query()
             .CountAsync(f => f.RecipientUserId == userId && f.SharedWithPlayer && !f.IsDeleted);
 
-        var items = mapper.Map<IEnumerable<FeedbackDto>>(feedbacks);
-        await EnrichWithProfilesAsync(items);
+        var items = mapper.Map<List<FeedbackDto>>(feedbacks);
+        await EnrichAsync(items);
 
         return new FeedbackListResponseDto
         {
@@ -295,8 +296,8 @@ public class FeedbackService(
         var total = await feedbackRepository.Query()
             .CountAsync(f => f.CoachUserId == userId && !f.IsDeleted);
 
-        var items = mapper.Map<IEnumerable<FeedbackDto>>(feedbacks);
-        await EnrichWithProfilesAsync(items);
+        var items = mapper.Map<List<FeedbackDto>>(feedbacks);
+        await EnrichAsync(items);
 
         return new FeedbackListResponseDto
         {
@@ -641,9 +642,41 @@ public class FeedbackService(
         }
     }
 
-    private async Task EnrichWithProfilesAsync(FeedbackDto feedback)
+    /// <summary>
+    /// Names and pictures come from the profile rows this service mirrors; the session each row
+    /// was given at comes from events-service, asked once for the whole page. Neither answer
+    /// depends on the other.
+    /// </summary>
+    private Task EnrichAsync(IReadOnlyCollection<FeedbackDto> feedbacks) =>
+        Task.WhenAll(EnrichWithProfilesAsync(feedbacks), EnrichWithEventsAsync(feedbacks));
+
+    private Task EnrichAsync(FeedbackDto feedback) => EnrichAsync([feedback]);
+
+    private async Task EnrichWithEventsAsync(IReadOnlyCollection<FeedbackDto> feedbacks)
     {
-        await EnrichWithProfilesAsync(new[] { feedback });
+        var eventIds = feedbacks
+            .Where(f => f.EventId is { } id && id != Guid.Empty)
+            .Select(f => f.EventId!.Value)
+            .Distinct()
+            .ToList();
+
+        if (eventIds.Count == 0) return;
+
+        var summaries = await eventsClient.GetEventInfoAsync(eventIds);
+
+        foreach (var feedback in feedbacks)
+        {
+            if (feedback.EventId is { } eventId && summaries.TryGetValue(eventId, out var summary))
+            {
+                feedback.Event = new FeedbackEventDto
+                {
+                    Id = summary.Id,
+                    Name = summary.Name,
+                    StartTime = summary.StartTime,
+                    Type = summary.Type
+                };
+            }
+        }
     }
 
     private async Task PublishFeedbackSharedAsync(Feedback feedback, string? preview)

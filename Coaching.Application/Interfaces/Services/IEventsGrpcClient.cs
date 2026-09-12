@@ -9,7 +9,17 @@ public record EventContext(
     Guid? ContextId);
 
 /// <summary>
-/// gRPC client for authorization checks against events-service.
+/// What a feedback row says about the session it was given at: enough to print the card without
+/// the client fetching the event itself.
+/// </summary>
+public record EventInfo(
+    Guid Id,
+    string Name,
+    DateTime StartTime,
+    string Type);
+
+/// <summary>
+/// gRPC client for authorization checks and event summaries against events-service.
 /// </summary>
 public interface IEventsGrpcClient
 {
@@ -24,8 +34,20 @@ public interface IEventsGrpcClient
     Task<(bool IsParticipant, bool EventExists)> IsEventParticipantAsync(Guid eventId, Guid userId);
 
     /// <summary>
+    /// The user ids on an event's roster. One call answers for every recipient a screen asks
+    /// about, which is what the feedback can-create batch relies on.
+    /// </summary>
+    Task<IReadOnlySet<Guid>> GetEventParticipantIdsAsync(Guid eventId);
+
+    /// <summary>
     /// Get the context of an event (type, context type, context ID) for authorization.
     /// Returns null if the event does not exist.
     /// </summary>
     Task<EventContext?> GetEventContextAsync(Guid eventId);
+
+    /// <summary>
+    /// Name, start and type of every live event among these ids, keyed by id. One call answers
+    /// for a whole page of feedback rows; an id that names no live event is simply absent.
+    /// </summary>
+    Task<IReadOnlyDictionary<Guid, EventInfo>> GetEventInfoAsync(IReadOnlyCollection<Guid> eventIds);
 }

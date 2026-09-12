@@ -3,6 +3,7 @@ using System;
 using Coaching.Infrastructure.Data.Context;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Coaching.Infrastructure.Migrations
 {
     [DbContext(typeof(CoachingDbContext))]
-    partial class CoachingDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260906205309_TacticsBoards")]
+    partial class TacticsBoards
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -1404,12 +1407,6 @@ namespace Coaching.Infrastructure.Migrations
                     b.Property<Guid>("OwnerUserId")
                         .HasColumnType("uuid");
 
-                    b.Property<Guid?>("ParentFolderId")
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("Position")
-                        .HasColumnType("integer");
-
                     b.Property<int>("Scope")
                         .HasColumnType("integer");
 
@@ -1420,8 +1417,6 @@ namespace Coaching.Infrastructure.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("ParentFolderId", "Position");
 
                     b.HasIndex("Scope", "ClubId");
 
@@ -2780,16 +2775,6 @@ namespace Coaching.Infrastructure.Migrations
                     b.Navigation("Folder");
                 });
 
-            modelBuilder.Entity("Coaching.Domain.Models.Tactics.TacticsFolder", b =>
-                {
-                    b.HasOne("Coaching.Domain.Models.Tactics.TacticsFolder", "ParentFolder")
-                        .WithMany("Children")
-                        .HasForeignKey("ParentFolderId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
-                    b.Navigation("ParentFolder");
-                });
-
             modelBuilder.Entity("Coaching.Domain.Models.Templates.PlanBookmark", b =>
                 {
                     b.HasOne("Coaching.Domain.Models.Templates.TrainingPlan", "Plan")
@@ -3120,8 +3105,6 @@ namespace Coaching.Infrastructure.Migrations
             modelBuilder.Entity("Coaching.Domain.Models.Tactics.TacticsFolder", b =>
                 {
                     b.Navigation("Boards");
-
-                    b.Navigation("Children");
                 });
 
             modelBuilder.Entity("Coaching.Domain.Models.Templates.PlanComment", b =>

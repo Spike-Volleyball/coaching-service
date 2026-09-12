@@ -1,6 +1,7 @@
-using Coaching.Domain.Models.Drills;
+﻿using Coaching.Domain.Models.Drills;
 using Coaching.Domain.Models.Evaluation;
 using Coaching.Domain.Models.Feedback;
+using Coaching.Domain.Models.Tactics;
 using Coaching.Domain.Models.Templates;
 using Microsoft.EntityFrameworkCore;
 using Shared.DataAccess;
@@ -67,6 +68,10 @@ public class CoachingDbContext : BaseDbContext
     public DbSet<FeedbackMedia> FeedbackMedia => Set<FeedbackMedia>();
     public DbSet<Praise> Praises => Set<Praise>();
     public DbSet<PlayerBadge> PlayerBadges => Set<PlayerBadge>();
+
+    // Tactics
+    public DbSet<TacticsBoard> TacticsBoards => Set<TacticsBoard>();
+    public DbSet<TacticsFolder> TacticsFolders => Set<TacticsFolder>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

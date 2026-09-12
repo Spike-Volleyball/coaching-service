@@ -1,3 +1,4 @@
+using System.Globalization;
 using Coaching.Application.Interfaces.Services;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
@@ -6,8 +7,8 @@ using Shared.Contracts.Grpc;
 namespace Coaching.Infrastructure.Services;
 
 /// <summary>
-/// gRPC client for events-service authorization checks with in-memory caching.
-/// Participant status is cached for 5 minutes to reduce cross-service calls.
+/// gRPC client for events-service authorization checks and event summaries with in-memory caching.
+/// An event's roster and its context are cached for 5 minutes to reduce cross-service calls.
 /// </summary>
 public class EventsGrpcClient : IEventsGrpcClient
 {
@@ -16,7 +17,7 @@ public class EventsGrpcClient : IEventsGrpcClient
     private readonly ILogger<EventsGrpcClient> _logger;
 
     private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(5);
-    private const string ParticipantCacheKeyPrefix = "event_participant_";
+    private const string ParticipantsCacheKeyPrefix = "event_participants_";
     private const string EventContextCacheKeyPrefix = "event_context_";
 
     public EventsGrpcClient(
@@ -50,9 +51,16 @@ public class EventsGrpcClient : IEventsGrpcClient
 
     public async Task<(bool IsParticipant, bool EventExists)> IsEventParticipantAsync(Guid eventId, Guid userId)
     {
-        var cacheKey = $"{ParticipantCacheKeyPrefix}{eventId}_{userId}";
+        var participants = await GetEventParticipantIdsAsync(eventId);
+        // A roster that came back proves the event exists.
+        return (participants.Contains(userId), true);
+    }
 
-        if (_cache.TryGetValue(cacheKey, out (bool IsParticipant, bool EventExists) cached))
+    public async Task<IReadOnlySet<Guid>> GetEventParticipantIdsAsync(Guid eventId)
+    {
+        var cacheKey = $"{ParticipantsCacheKeyPrefix}{eventId}";
+
+        if (_cache.TryGetValue(cacheKey, out IReadOnlySet<Guid>? cached) && cached != null)
             return cached;
 
         try
@@ -62,17 +70,13 @@ public class EventsGrpcClient : IEventsGrpcClient
                 EventId = eventId.ToString()
             });
 
-            var eventExists = true; // If the call succeeds, event exists
-            var isParticipant = response.Participants.Any(p => p.UserId == userId.ToString());
-
-            var result = (isParticipant, eventExists);
-            _cache.Set(cacheKey, result, CacheDuration);
-            return result;
+            var participants = response.Participants.Select(p => Guid.Parse(p.UserId)).ToHashSet();
+            _cache.Set(cacheKey, participants, CacheDuration);
+            return participants;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to check event participant status via gRPC for event {EventId}, user {UserId}",
-                eventId, userId);
+            _logger.LogError(ex, "Failed to fetch event participants via gRPC for event {EventId}", eventId);
             throw;
         }
     }
@@ -81,26 +85,59 @@ public class EventsGrpcClient : IEventsGrpcClient
     {
         var cacheKey = $"{EventContextCacheKeyPrefix}{eventId}";
 
-        if (_cache.TryGetValue(cacheKey, out EventContext? cachedContext))
-            return cachedContext;
+        if (_cache.TryGetValue(cacheKey, out EventContext? cached) && cached != null)
+            return cached;
 
         try
         {
-            // The current events gRPC proto does not expose event type or context fields.
-            // Use IsEventAdmin as a lightweight probe to confirm the event exists, then
-            // return a permissive default context so callers can still function.
-            // TODO: extend events.proto with a GetEventContext RPC and update this implementation.
-            _logger.LogWarning("GetEventContextAsync is not fully supported by the current events.proto - " +
-                               "returning default context for event {EventId}", eventId);
+            var response = await _grpcClient.GetEventContextAsync(new GetEventContextRequest
+            {
+                EventId = eventId.ToString()
+            });
 
-            var context = new EventContext("TrainingSession", "None", null);
+            if (!response.Found)
+                return null;
+
+            var context = new EventContext(
+                response.EventType,
+                response.ContextType,
+                Guid.TryParse(response.ContextId, out var contextId) ? contextId : null);
             _cache.Set(cacheKey, context, CacheDuration);
             return context;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to get event context via gRPC for event {EventId}", eventId);
-            return null;
+            throw;
+        }
+    }
+
+    public async Task<IReadOnlyDictionary<Guid, EventInfo>> GetEventInfoAsync(IReadOnlyCollection<Guid> eventIds)
+    {
+        var ids = eventIds.Where(id => id != Guid.Empty).Distinct().ToList();
+        if (ids.Count == 0)
+            return new Dictionary<Guid, EventInfo>();
+
+        try
+        {
+            var request = new GetEventSummariesRequest();
+            request.EventIds.AddRange(ids.Select(id => id.ToString()));
+            var response = await _grpcClient.GetEventSummariesAsync(request);
+
+            return response.Events.ToDictionary(
+                e => Guid.Parse(e.EventId),
+                e => new EventInfo(
+                    Guid.Parse(e.EventId),
+                    e.Name,
+                    DateTime.Parse(e.StartTime, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                    e.EventType));
+        }
+        catch (Exception ex)
+        {
+            // A list that cannot name its sessions is still a list: a row without a summary is
+            // rendered from the event id by the clients, as every row was before.
+            _logger.LogError(ex, "Failed to fetch summaries for {EventCount} events via gRPC", ids.Count);
+            return new Dictionary<Guid, EventInfo>();
         }
     }
 }

@@ -1,4 +1,4 @@
-using Coaching.Application.Interfaces.Services;
+﻿using Coaching.Application.Interfaces.Services;
 using Coaching.Application.Mappings;
 using Coaching.Application.Services;
 using Microsoft.Extensions.DependencyInjection;
@@ -28,6 +28,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPlanCoachService, PlanCoachService>();
         services.AddScoped<IRunService, RunService>();
         services.AddScoped<IPlanFloorService, PlanFloorService>();
+        services.AddScoped<ITacticsBoardService, TacticsBoardService>();
 
         // Evaluation services
         services.AddScoped<IEvaluationExerciseService, EvaluationExerciseService>();

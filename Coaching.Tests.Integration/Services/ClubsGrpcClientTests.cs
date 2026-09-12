@@ -4,6 +4,7 @@ using Grpc.Core;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
+using NSubstitute.ExceptionExtensions;
 using Shared.Contracts.Grpc;
 using Shared.Enums;
 
@@ -153,18 +154,91 @@ public class ClubsGrpcClientTests
             Arg.Any<CancellationToken>());
     }
 
-    [TestCase(true, true)]
-    [TestCase(false, false)]
-    public async Task IsUserUnitMemberAsync_FollowsClubsServiceMembership(bool isMember, bool expected)
+    [Test]
+    public async Task GetUnitMemberIdsAsync_Team_AsksForTheTeamsDirectRowsOnly()
     {
         // Arrange
-        var sut = BuildSut(UnitMembership(isMember, "Player"));
+        var teamId = Guid.NewGuid();
+        var playerId = Guid.NewGuid();
+        var coachId = Guid.NewGuid();
+        var grpcClient = Substitute.For<ClubsInternalService.ClubsInternalServiceClient>();
+        grpcClient.GetTeamMembersAsync(
+                Arg.Is<GetTeamMembersRequest>(r => r.TeamId == teamId.ToString() && r.Audience == Shared.Contracts.Grpc.Audience.Members),
+                Arg.Any<Metadata>(),
+                Arg.Any<DateTime?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(CompletedCall(TeamMembers(playerId, coachId)));
+        var sut = BuildSut(grpcClient);
 
         // Act
-        var result = await sut.IsUserUnitMemberAsync(Guid.NewGuid(), ContextType.Team, Guid.NewGuid());
+        var result = await sut.GetUnitMemberIdsAsync(ContextType.Team, teamId);
 
         // Assert
-        result.Should().Be(expected);
+        result.Should().BeEquivalentTo([playerId, coachId]);
+    }
+
+    [Test]
+    public async Task GetUnitMemberIdsAsync_Group_AsksForTheGroupsDirectRowsOnly()
+    {
+        // Arrange
+        var groupId = Guid.NewGuid();
+        var memberId = Guid.NewGuid();
+        var grpcClient = Substitute.For<ClubsInternalService.ClubsInternalServiceClient>();
+        grpcClient.GetGroupMembersAsync(
+                Arg.Is<GetGroupMembersRequest>(r => r.GroupId == groupId.ToString() && r.Audience == Shared.Contracts.Grpc.Audience.Members),
+                Arg.Any<Metadata>(),
+                Arg.Any<DateTime?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(CompletedCall(GroupMembers(memberId)));
+        var sut = BuildSut(grpcClient);
+
+        // Act
+        var result = await sut.GetUnitMemberIdsAsync(ContextType.Group, groupId);
+
+        // Assert
+        result.Should().BeEquivalentTo([memberId]);
+    }
+
+    [Test]
+    public async Task GetUnitMemberIdsAsync_ClubsServiceUnreachable_ReturnsNobody()
+    {
+        // Arrange
+        var grpcClient = Substitute.For<ClubsInternalService.ClubsInternalServiceClient>();
+        grpcClient.GetTeamMembersAsync(
+                Arg.Any<GetTeamMembersRequest>(),
+                Arg.Any<Metadata>(),
+                Arg.Any<DateTime?>(),
+                Arg.Any<CancellationToken>())
+            .Throws(new RpcException(new Status(StatusCode.Unavailable, "down")));
+        var sut = BuildSut(grpcClient);
+
+        // Act
+        var result = await sut.GetUnitMemberIdsAsync(ContextType.Team, Guid.NewGuid());
+
+        // Assert
+        result.Should().BeEmpty();
+    }
+
+    [Test]
+    public async Task GetClubMemberIdsAsync_AsksForEveryDirectRow()
+    {
+        // Arrange
+        var clubId = Guid.NewGuid();
+        var memberId = Guid.NewGuid();
+        var grpcClient = Substitute.For<ClubsInternalService.ClubsInternalServiceClient>();
+        grpcClient.GetClubMembersAsync(
+                Arg.Is<GetClubMembersRequest>(r => r.ClubId == clubId.ToString() && r.Audience == Shared.Contracts.Grpc.Audience.Members),
+                Arg.Any<Metadata>(),
+                Arg.Any<DateTime?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(CompletedCall(ClubMembers(memberId)));
+        var sut = BuildSut(grpcClient);
+
+        // Act
+        var result = await sut.GetClubMemberIdsAsync(clubId);
+
+        // Assert
+        result.Should().BeEquivalentTo([memberId]);
     }
 
     [Test]
@@ -217,6 +291,27 @@ public class ClubsGrpcClientTests
     {
         var response = new GetMembershipResponse { IsMember = isMember };
         response.Roles.AddRange(roles);
+        return response;
+    }
+
+    private static GetTeamMembersResponse TeamMembers(params Guid[] userIds)
+    {
+        var response = new GetTeamMembersResponse();
+        response.Members.AddRange(userIds.Select(id => new MemberInfo { UserId = id.ToString() }));
+        return response;
+    }
+
+    private static GetGroupMembersResponse GroupMembers(params Guid[] userIds)
+    {
+        var response = new GetGroupMembersResponse();
+        response.Members.AddRange(userIds.Select(id => new MemberInfo { UserId = id.ToString() }));
+        return response;
+    }
+
+    private static GetClubMembersResponse ClubMembers(params Guid[] userIds)
+    {
+        var response = new GetClubMembersResponse();
+        response.Members.AddRange(userIds.Select(id => new MemberInfo { UserId = id.ToString() }));
         return response;
     }
 
