@@ -168,9 +168,11 @@ namespace Coaching
             },
             bus =>
             {
+                // Retried: each converges when it runs again. A replica write, a delete of what is
+                // still there, and a deletion whose ack auth-service dedupes.
                 bus.AddRetryingConsumer<UserProfileUpdatedConsumer>();
-                bus.AddConsumer<EventDeletedConsumer>();
-                bus.AddConsumer<Coaching.Application.Consumers.UserDeletionConfirmedConsumer>();
+                bus.AddRetryingConsumer<EventDeletedConsumer>();
+                bus.AddRetryingConsumer<Coaching.Application.Consumers.UserDeletionConfirmedConsumer>();
             });
 
             if (jwtSettings != null)
