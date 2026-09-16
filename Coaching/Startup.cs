@@ -14,6 +14,7 @@ using Shared.DataAccess.Repositories;
 using Shared.DataAccess.Repositories.Interfaces;
 using Coaching.Application.Consumers;
 using Shared.Messaging.Consumers;
+using Shared.Messaging.Definitions;
 using Shared.Messaging.Extensions;
 using Shared.Options;
 using Shared.Services.Analytics;
@@ -167,7 +168,7 @@ namespace Coaching
             },
             bus =>
             {
-                bus.AddConsumer<UserProfileUpdatedConsumer>();
+                bus.AddRetryingConsumer<UserProfileUpdatedConsumer>();
                 bus.AddConsumer<EventDeletedConsumer>();
                 bus.AddConsumer<Coaching.Application.Consumers.UserDeletionConfirmedConsumer>();
             });
