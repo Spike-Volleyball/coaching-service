@@ -14,6 +14,7 @@ using Shared.DataAccess.Repositories;
 using Shared.DataAccess.Repositories.Interfaces;
 using Coaching.Application.Consumers;
 using Shared.Messaging.Consumers;
+using Shared.Messaging.Definitions;
 using Shared.Messaging.Extensions;
 using Shared.Options;
 using Shared.Services.Analytics;
@@ -167,9 +168,11 @@ namespace Coaching
             },
             bus =>
             {
-                bus.AddConsumer<UserProfileUpdatedConsumer>();
-                bus.AddConsumer<EventDeletedConsumer>();
-                bus.AddConsumer<Coaching.Application.Consumers.UserDeletionConfirmedConsumer>();
+                // Retried: each converges when it runs again. A replica write, a delete of what is
+                // still there, and a deletion whose ack auth-service dedupes.
+                bus.AddRetryingConsumer<UserProfileUpdatedConsumer>();
+                bus.AddRetryingConsumer<EventDeletedConsumer>();
+                bus.AddRetryingConsumer<Coaching.Application.Consumers.UserDeletionConfirmedConsumer>();
             });
 
             if (jwtSettings != null)
