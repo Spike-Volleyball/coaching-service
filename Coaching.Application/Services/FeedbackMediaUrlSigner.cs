@@ -23,12 +23,9 @@ public class FeedbackMediaUrlSigner(
 
     public string SignReadUrl(string url)
     {
-        if (string.IsNullOrEmpty(url)) return url;
+        if (!IsStored(url)) return url;
 
-        var publicBase = s3Settings.Value.PublicBaseUrl.TrimEnd('/') + "/";
-        if (!url.StartsWith(publicBase, StringComparison.OrdinalIgnoreCase)) return url;
-
-        var key = url[publicBase.Length..];
+        var key = url[PublicBase.Length..];
         var queryStart = key.IndexOf('?');
         if (queryStart >= 0) key = key[..queryStart];
 
@@ -40,4 +37,9 @@ public class FeedbackMediaUrlSigner(
             Expires = timeProvider.GetUtcNow().UtcDateTime.Add(ReadUrlLifetime),
         });
     }
+
+    public bool IsStored(string url) =>
+        !string.IsNullOrEmpty(url) && url.StartsWith(PublicBase, StringComparison.OrdinalIgnoreCase);
+
+    private string PublicBase => s3Settings.Value.PublicBaseUrl.TrimEnd('/') + "/";
 }

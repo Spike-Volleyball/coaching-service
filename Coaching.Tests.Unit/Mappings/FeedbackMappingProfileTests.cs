@@ -31,6 +31,7 @@ public class FeedbackMappingProfileTests : UnitTestBase
 
         var signer = Substitute.For<IFeedbackMediaUrlSigner>();
         signer.SignReadUrl(Arg.Any<string>()).Returns(call => $"signed:{call.Arg<string>()}");
+        signer.IsStored(Arg.Any<string>()).Returns(call => call.Arg<string>().StartsWith("s3://"));
 
         var services = new ServiceCollection();
         services.AddApplicationMappings();
@@ -93,5 +94,28 @@ public class FeedbackMappingProfileTests : UnitTestBase
         // Assert
         dto.Attachments.Should().ContainSingle()
             .Which.Url.Should().Be("signed:s3://photo.jpg");
+    }
+
+    [Test]
+    public void Map_FeedbackWithAttachments_SaysWhichAreUploadedFilesAndWhichAreLinks()
+    {
+        // Arrange — the row stores no source; the web editor needs one to put a file in the
+        // uploader and a link in the link dialog, and our bucket is what tells them apart.
+        var feedback = new Feedback
+        {
+            RecipientUserId = Guid.NewGuid(),
+            CoachUserId = Guid.NewGuid(),
+            Media =
+            [
+                new FeedbackMedia { Url = "s3://photo.jpg", Type = FeedbackMediaType.Image, Order = 0 },
+                new FeedbackMedia { Url = "https://youtu.be/abc", Type = FeedbackMediaType.Video, Order = 1 },
+            ],
+        };
+
+        // Act
+        var dto = _sut.Map<FeedbackDto>(feedback);
+
+        // Assert
+        dto.Attachments.Select(a => a.Source).Should().Equal(FeedbackMediaSource.File, FeedbackMediaSource.Link);
     }
 }
