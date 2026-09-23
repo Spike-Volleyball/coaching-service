@@ -31,6 +31,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITacticsBoardService, TacticsBoardService>();
 
         // Evaluation services
+        services.AddScoped<IEvaluationAccess, EvaluationAccess>();
         services.AddScoped<IEvaluationExerciseService, EvaluationExerciseService>();
         services.AddScoped<IEvaluationPlanService, EvaluationPlanService>();
         services.AddScoped<IEvaluationSessionService, EvaluationSessionService>();

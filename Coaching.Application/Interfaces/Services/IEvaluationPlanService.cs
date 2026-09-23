@@ -5,8 +5,14 @@ namespace Coaching.Application.Interfaces.Services;
 public interface IEvaluationPlanService
 {
     Task<EvaluationPlanDto> CreateAsync(CreateEvaluationPlanDto request, Guid userId);
-    Task<EvaluationPlanDto?> GetByIdAsync(Guid id);
-    Task<List<EvaluationPlanDto>> GetByClubIdAsync(Guid clubId);
+    /// <summary>
+    /// One plan, for a signed-in reader. Refuses rather than returning null: a plan the reader may
+    /// not see raises the same not-found as one that is not there, so the two cannot be told apart.
+    /// </summary>
+    Task<EvaluationPlanDto> GetByIdForUserAsync(Guid id, Guid userId);
+
+    /// <summary>A club's plans for its staff; anyone else gets the empty list a club with none gives.</summary>
+    Task<List<EvaluationPlanDto>> GetByClubIdAsync(Guid clubId, Guid userId);
     Task<List<EvaluationPlanDto>> GetByUserIdAsync(Guid userId);
     Task<EvaluationPlanDto> UpdateAsync(Guid id, UpdateEvaluationPlanDto request, Guid userId);
     Task DeleteAsync(Guid id, Guid userId);
