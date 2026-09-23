@@ -229,6 +229,9 @@ public class FeedbackService(
 
         feedbackRepository.Update(feedback);
 
+        if (request.Attachments != null)
+            await StageAttachmentsAsync(feedback.Id, request.Attachments);
+
         // Publishing before the save is what puts the message in the transactional outbox;
         // a Publish after the last SaveChangesAsync is silently dropped.
         if (feedback.SharedWithPlayer)
@@ -243,6 +246,49 @@ public class FeedbackService(
         await feedbackRepository.SaveChangesAsync();
 
         return await GetByIdAsync(id, userId) ?? throw new Exception("Failed to retrieve feedback");
+    }
+
+    /// <summary>
+    /// Brings the feedback's own attachments to the list an edit sends, staged for the caller's
+    /// single save so the note, the share flag and the attachments land together or not at all.
+    /// </summary>
+    private async Task StageAttachmentsAsync(Guid feedbackId, IReadOnlyList<UpdateFeedbackMediaDto> attachments)
+    {
+        var current = await feedbackMediaRepository.Query()
+            .Where(m => m.FeedbackId == feedbackId && !m.IsDeleted)
+            .ToDictionaryAsync(m => m.Id);
+
+        if (attachments.Any(a => a.Id is { } id && !current.ContainsKey(id)))
+            throw new EntityNotFoundException("Attachment not found");
+
+        var keptIds = attachments.Where(a => a.Id.HasValue).Select(a => a.Id!.Value).ToHashSet();
+        foreach (var removed in current.Values.Where(m => !keptIds.Contains(m.Id)))
+            removed.IsDeleted = true;
+
+        // A kept row keeps its stored Url whatever the entry says: reads hand out presigned URLs.
+        // New rows go through Add, not through the tracked parent's collection — BaseEntity sets
+        // every Id at construction, and a keyed child found only by navigation saves as an UPDATE.
+        for (var order = 0; order < attachments.Count; order++)
+        {
+            var entry = attachments[order];
+            if (entry.Id is { } id)
+            {
+                var kept = current[id];
+                kept.Title = entry.Title;
+                kept.Type = entry.Type;
+                kept.Order = order;
+                continue;
+            }
+
+            feedbackMediaRepository.Add(new FeedbackMedia
+            {
+                FeedbackId = feedbackId,
+                Url = entry.Url,
+                Type = entry.Type,
+                Title = entry.Title,
+                Order = order,
+            });
+        }
     }
 
     public async Task DeleteAsync(Guid id, Guid userId)

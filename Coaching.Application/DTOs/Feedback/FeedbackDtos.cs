@@ -72,6 +72,12 @@ public class FeedbackMediaDto
     public FeedbackMediaType Type { get; set; }
     public string? Title { get; set; }
     public int Order { get; set; }
+
+    /// <summary>
+    /// A file uploaded to our bucket, or a pasted link. Not stored on the row: the stored URL
+    /// answers it, and an editor needs it to put a file in the uploader and a link in the link dialog.
+    /// </summary>
+    public FeedbackMediaSource Source { get; set; }
 }
 
 public record CreateFeedbackMediaDto
@@ -139,6 +145,24 @@ public record UpdateFeedbackDto
     public string? Content { get; set; }
     public string? Comment { get; set; }
     public bool? SharedWithPlayer { get; set; }
+
+    /// <summary>
+    /// The feedback's own attachments as they should stand after the edit, in order; null leaves
+    /// them as they are. An entry naming one already on this feedback keeps it, a new one arrives
+    /// without an id, and any left out is removed.
+    /// </summary>
+    public List<UpdateFeedbackMediaDto>? Attachments { get; set; }
+}
+
+/// <summary>
+/// One attachment in an edit: <see cref="CreateFeedbackMediaDto"/> plus the id of the attachment it
+/// keeps. A kept attachment takes its title, type and position from the entry but never its URL —
+/// a read hands out presigned URLs, and writing one back would store a link that expires, taking
+/// the player's file with it. A changed link is therefore a new entry, and the old one is left out.
+/// </summary>
+public record UpdateFeedbackMediaDto : CreateFeedbackMediaDto
+{
+    public Guid? Id { get; set; }
 }
 
 public record AddImprovementPointDto

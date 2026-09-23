@@ -84,4 +84,35 @@ public class FeedbackMediaUrlSignerTests : UnitTestBase
         _s3.Received(1).GetPreSignedURL(Arg.Is<GetPreSignedUrlRequest>(r =>
             r.Key == "feedback/coach-1/file-1.mp4"));
     }
+
+    [Test]
+    public void IsStored_OwnBucketUrl_IsTrue()
+    {
+        // Act & Assert
+        _sut.IsStored($"{PublicBaseUrl}/feedback/coach-1/file-1.mp4").Should().BeTrue();
+    }
+
+    [Test]
+    public void IsStored_ExternalUrl_IsFalse()
+    {
+        // Act & Assert
+        _sut.IsStored("https://www.youtube.com/watch?v=abc").Should().BeFalse();
+    }
+
+    [Test]
+    public void IsStored_UrlThatOnlyStartsLikeTheBucketHost_IsFalse()
+    {
+        // Arrange — the base is matched with its trailing slash, so a look-alike host is not ours.
+        var lookalike = $"{PublicBaseUrl}.evil.example/feedback/file.mp4";
+
+        // Act & Assert
+        _sut.IsStored(lookalike).Should().BeFalse();
+    }
+
+    [Test]
+    public void IsStored_EmptyUrl_IsFalse()
+    {
+        // Act & Assert
+        _sut.IsStored("").Should().BeFalse();
+    }
 }

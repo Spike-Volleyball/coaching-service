@@ -1,6 +1,7 @@
 using AutoMapper;
 using Coaching.Application.DTOs.Feedback;
 using Coaching.Application.Interfaces.Services;
+using Coaching.Domain.Enums;
 using Coaching.Domain.Models.Feedback;
 
 namespace Coaching.Application.Mappings;
@@ -28,7 +29,8 @@ public class FeedbackMappingProfile : Profile
         CreateMap<ImprovementPointMedia, ImprovementPointMediaDto>()
             .ForMember(d => d.Url, opt => opt.MapFrom<SignedImprovementPointMediaUrlResolver>());
         CreateMap<FeedbackMedia, FeedbackMediaDto>()
-            .ForMember(d => d.Url, opt => opt.MapFrom<SignedFeedbackMediaUrlResolver>());
+            .ForMember(d => d.Url, opt => opt.MapFrom<SignedFeedbackMediaUrlResolver>())
+            .ForMember(d => d.Source, opt => opt.MapFrom<FeedbackMediaSourceResolver>());
         CreateMap<CreateFeedbackMediaDto, FeedbackMedia>()
             .ForMember(d => d.Id, opt => opt.Ignore())
             .ForMember(d => d.FeedbackId, opt => opt.Ignore())
@@ -74,6 +76,13 @@ public class SignedFeedbackMediaUrlResolver(IFeedbackMediaUrlSigner signer)
 {
     public string Resolve(FeedbackMedia source, FeedbackMediaDto destination, string destMember, ResolutionContext context) =>
         signer.SignReadUrl(source.Url);
+}
+
+public class FeedbackMediaSourceResolver(IFeedbackMediaUrlSigner signer)
+    : IValueResolver<FeedbackMedia, FeedbackMediaDto, FeedbackMediaSource>
+{
+    public FeedbackMediaSource Resolve(FeedbackMedia source, FeedbackMediaDto destination, FeedbackMediaSource destMember, ResolutionContext context) =>
+        signer.IsStored(source.Url) ? FeedbackMediaSource.File : FeedbackMediaSource.Link;
 }
 
 public class SignedImprovementPointMediaUrlResolver(IFeedbackMediaUrlSigner signer)
