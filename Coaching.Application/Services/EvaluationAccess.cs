@@ -12,6 +12,9 @@ public class EvaluationAccess(IClubsGrpcClient clubs, IEvaluationGroupRepository
     public Task<bool> MayReadClubAsync(Guid clubId, Guid userId) =>
         clubs.IsClubStaffAsync(userId, clubId);
 
+    public Task<bool> MayEvaluateInClubAsync(Guid clubId, Guid userId) =>
+        clubs.CanGiveFeedbackInClubAsync(userId, clubId);
+
     public async Task<bool> MayReadPlanAsync(EvaluationPlan plan, Guid userId) =>
         plan.CreatedByUserId == userId
         || (plan.ClubId is { } clubId && await MayReadClubAsync(clubId, userId));

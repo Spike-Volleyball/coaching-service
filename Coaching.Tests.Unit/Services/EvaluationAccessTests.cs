@@ -106,6 +106,21 @@ public class EvaluationAccessTests : UnitTestBase
     }
 
     [Test]
+    public async Task MayEvaluateInClubAsync_AsksWhetherTheUserMayGiveFeedbackInTheClub()
+    {
+        // Arrange — evaluating a player is appraising them, which is what feedback.give grants.
+        _clubs.CanGiveFeedbackInClubAsync(_staffId, _clubId).Returns(true);
+
+        // Act
+        var coach = await _sut.MayEvaluateInClubAsync(_clubId, _staffId);
+        var stranger = await _sut.MayEvaluateInClubAsync(_clubId, _strangerId);
+
+        // Assert
+        coach.Should().BeTrue();
+        stranger.Should().BeFalse();
+    }
+
+    [Test]
     public async Task EnsureMayReadSessionAsync_ForItsCoach_ReturnsItWithoutAskingFurther()
     {
         // Arrange

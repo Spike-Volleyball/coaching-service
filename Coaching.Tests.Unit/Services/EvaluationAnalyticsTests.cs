@@ -75,9 +75,10 @@ public class EvaluationAnalyticsTests
         mapper.Map<PlayerEvaluationDto>(Arg.Any<PlayerEvaluation>())
             .Returns(call => new PlayerEvaluationDto { Id = call.Arg<PlayerEvaluation>().Id });
 
+        var access = Substitute.For<IEvaluationAccess>();
+        access.MayEvaluateInClubAsync(ClubId, CoachId).Returns(true);
         _sessions = new EvaluationSessionService(
-            _sessionRepository, _participantRepository, _planRepository, _analytics,
-            Substitute.For<IEvaluationAccess>(), mapper);
+            _sessionRepository, _participantRepository, _planRepository, _analytics, access, mapper);
 
         _lifecycle = new EvaluationSessionLifecycleService(
             _sessionRepository,

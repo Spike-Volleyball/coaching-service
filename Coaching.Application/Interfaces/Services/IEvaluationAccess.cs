@@ -23,6 +23,14 @@ public interface IEvaluationAccess
     Task<bool> MayReadPlanAsync(EvaluationPlan plan, Guid userId);
 
     /// <summary>
+    /// Whether the user may run evaluations in a club: open a session there, or evaluate one of its
+    /// groups. Evaluating a player is appraising them, so this is the permission giving feedback in
+    /// the club asks for (feedback.give, answered by
+    /// <see cref="IClubsGrpcClient.CanGiveFeedbackInClubAsync"/>) rather than a new one.
+    /// </summary>
+    Task<bool> MayEvaluateInClubAsync(Guid clubId, Guid userId);
+
+    /// <summary>
     /// Returns the session if the user may read it: its coach, an evaluator on one of its groups (who
     /// scores from the run screen, which reads the session and its scores), or its club's staff.
     /// Otherwise throws the not-found a missing session gives — and treats a deleted one as missing.

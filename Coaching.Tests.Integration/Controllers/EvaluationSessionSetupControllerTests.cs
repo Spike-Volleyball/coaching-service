@@ -13,6 +13,7 @@ using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
+using NSubstitute;
 
 namespace Coaching.Tests.Integration.Controllers;
 
@@ -120,6 +121,54 @@ public class EvaluationSessionSetupControllerTests
             .Where(s => s.SessionId == sessionId && s.Status == EvaluationScoreStatus.Scored)
             .Select(s => s.PlayerId)
             .ToListAsync();
+    }
+
+    private async Task<int> StoredSessionsAsync()
+    {
+        using var scope = _factory.Services.CreateScope();
+        return await scope.ServiceProvider.GetRequiredService<CoachingDbContext>().Set<EvaluationSession>().CountAsync();
+    }
+
+    [Test]
+    public async Task Create_WithoutTheRightToEvaluateInTheClub_Returns403AndStoresNothing()
+    {
+        // Arrange — anyone signed in could open a session in any club, and its list then showed it.
+        var outsider = Guid.NewGuid();
+        SetAuth(outsider);
+
+        // Act
+        var response = await _client.PostAsJsonAsync("/v1/evaluation-sessions", new { clubId = _clubId, title = "Autumn trials" });
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await StoredSessionsAsync()).Should().Be(0);
+    }
+
+    [Test]
+    public async Task Create_BySomeoneWhoMayEvaluateInTheClub_Returns201WithADraft()
+    {
+        // Arrange
+        _factory.ClubsGrpcClient.CanGiveFeedbackInClubAsync(_coachId, _clubId).Returns(true);
+        SetAuth(_coachId);
+
+        // Act
+        var response = await _client.PostAsJsonAsync("/v1/evaluation-sessions", new { clubId = _clubId, title = "Autumn trials" });
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.Created, await response.Content.ReadAsStringAsync());
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        body.RootElement.GetProperty("status").GetString().Should().Be("Draft");
+        (await StoredSessionsAsync()).Should().Be(1);
+    }
+
+    [Test]
+    public async Task Create_Anonymously_Returns401()
+    {
+        // Act
+        var response = await _client.PostAsJsonAsync("/v1/evaluation-sessions", new { clubId = _clubId, title = "Autumn trials" });
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
     [Test]

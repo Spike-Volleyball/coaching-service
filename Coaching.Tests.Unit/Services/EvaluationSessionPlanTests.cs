@@ -37,6 +37,7 @@ public class EvaluationSessionPlanTests : UnitTestBase
         _sessions = Substitute.For<IEvaluationSessionRepository>();
         _plans = Substitute.For<IEvaluationPlanRepository>();
         _access = Substitute.For<IEvaluationAccess>();
+        _access.MayEvaluateInClubAsync(_clubId, _coachId).Returns(true);
         var mapper = Substitute.For<IMapper>();
         mapper.Map<EvaluationSessionDto>(Arg.Any<EvaluationSession>())
             .Returns(call => new EvaluationSessionDto { Id = call.Arg<EvaluationSession>().Id });
@@ -193,6 +194,33 @@ public class EvaluationSessionPlanTests : UnitTestBase
 
         // Assert
         session.Title.Should().Be("Renamed");
+        await _sessions.Received(1).SaveChangesAsync();
+    }
+
+    [Test]
+    public async Task CreateAsync_WhenTheCoachMayNotEvaluateInTheClub_ThrowsForbiddenAndCreatesNothing()
+    {
+        // Arrange
+        _access.MayEvaluateInClubAsync(_clubId, _coachId).Returns(false);
+
+        // Act
+        var act = () => _sut.CreateAsync(new CreateEvaluationSessionDto { ClubId = _clubId, Title = "Autumn trials" }, _coachId);
+
+        // Assert
+        await act.Should().ThrowAsync<ForbiddenException>();
+        _sessions.DidNotReceive().Add(Arg.Any<EvaluationSession>());
+        await _sessions.DidNotReceive().SaveChangesAsync();
+    }
+
+    [Test]
+    public async Task CreateAsync_WhenTheCoachMayEvaluateInTheClub_CreatesADraft()
+    {
+        // Act
+        await _sut.CreateAsync(new CreateEvaluationSessionDto { ClubId = _clubId, Title = "Autumn trials" }, _coachId);
+
+        // Assert
+        _sessions.Received(1).Add(Arg.Is<EvaluationSession>(s =>
+            s.ClubId == _clubId && s.CoachUserId == _coachId && s.Status == EvaluationSessionStatus.Draft));
         await _sessions.Received(1).SaveChangesAsync();
     }
 

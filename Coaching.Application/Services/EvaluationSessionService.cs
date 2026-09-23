@@ -24,6 +24,9 @@ public class EvaluationSessionService(
         if (string.IsNullOrWhiteSpace(request.Title))
             throw new BadRequestException("Session title is required", ErrorCodeEnum.ValidationError);
 
+        if (!await access.MayEvaluateInClubAsync(request.ClubId, coachUserId))
+            throw new ForbiddenException("Only this club's coaches can run evaluation sessions in it");
+
         if (request.EvaluationPlanId is { } planId)
             await EnsureSessionMayUsePlanAsync(planId, request.ClubId, coachUserId);
 
