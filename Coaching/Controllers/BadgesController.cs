@@ -2,6 +2,7 @@ using Asp.Versioning;
 using Coaching.Application.Interfaces.Services;
 using Microsoft.AspNetCore.Mvc;
 using Shared.DataAccess.Providers.Interfaces;
+using Shared.Security.Access;
 
 namespace Coaching.Controllers;
 
@@ -37,11 +38,12 @@ public class BadgesController : Shared.Microservices.Controllers.BaseApiControll
     public async Task<IActionResult> GetMyRecentBadges([FromQuery] int limit = 10)
     {
         CheckIsUserLoggedIn();
-        var badges = await _badgeService.GetRecentBadgesAsync(null, limit);
+        var badges = await _badgeService.GetRecentBadgesAsync(JwtPayload.UserId, limit);
         return Ok(badges);
     }
 
     [HttpGet("users/{userId:guid}/badges")]
+    [NoResourceScope("A user's badges show on their profile to any signed-in viewer; who may see a profile is profiles-service's rule, not asked here yet")]
     public async Task<IActionResult> GetUserBadges([FromRoute] Guid userId, [FromQuery] int page = 1, [FromQuery] int pageSize = 20)
     {
         var badges = await _badgeService.GetPlayerBadgesAsync(userId, page, pageSize);

@@ -46,7 +46,6 @@ GET /v{version:apiVersion}/plans/{id:guid}/like
 GET /v{version:apiVersion}/plans/{planId:guid}/floor
 GET /v{version:apiVersion}/skill-matrices/{id:guid}/export
 GET /v{version:apiVersion}/tactics-boards/{id:guid}
-GET /v{version:apiVersion}/users/{userId:guid}/badges
 POST /v{version:apiVersion}/clubs/{clubId:guid}/thresholds
 POST /v{version:apiVersion}/evaluation-exercises/{id:guid}/metrics
 POST /v{version:apiVersion}/evaluation-plans/{id:guid}/items
