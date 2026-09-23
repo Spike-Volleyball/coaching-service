@@ -21,6 +21,7 @@ public class EvaluationScoringService(
     IRepository<PlayerMetricScore> metricScoreRepository,
     IScoreCalculationService scoreCalculationService,
     IAnalyticsCapture analytics,
+    IEvaluationAccess access,
     IMapper mapper) : IEvaluationScoringService
 {
     public async Task<PlayerExerciseScoreDto> SubmitExerciseScoresAsync(Guid sessionId, SubmitExerciseScoresDto dto, Guid userId)
@@ -131,22 +132,18 @@ public class EvaluationScoringService(
         return mapper.Map<PlayerExerciseScoreDto>(updatedScore);
     }
 
-    public async Task<IEnumerable<PlayerExerciseScoreDto>> GetSessionScoresAsync(Guid sessionId)
+    public async Task<IEnumerable<PlayerExerciseScoreDto>> GetSessionScoresAsync(Guid sessionId, Guid userId)
     {
-        var session = await sessionRepository.GetByIdAsync(sessionId);
-        if (session == null)
-            throw new EntityNotFoundException("Evaluation session not found");
+        await access.EnsureMayReadSessionAsync(await sessionRepository.GetByIdAsync(sessionId), userId);
 
         var scores = await exerciseScoreRepository.GetBySessionIdAsync(sessionId);
         return mapper.Map<IEnumerable<PlayerExerciseScoreDto>>(scores);
     }
 
     public async Task<IEnumerable<PlayerExerciseScoreDto>> GetGroupExerciseScoresAsync(
-        Guid sessionId, Guid groupId, Guid exerciseId)
+        Guid sessionId, Guid groupId, Guid exerciseId, Guid userId)
     {
-        var session = await sessionRepository.GetByIdAsync(sessionId);
-        if (session == null)
-            throw new EntityNotFoundException("Evaluation session not found");
+        await access.EnsureMayReadSessionAsync(await sessionRepository.GetByIdAsync(sessionId), userId);
 
         var group = await groupRepository.GetByIdWithPlayersAsync(groupId);
         if (group == null || group.SessionId != sessionId)

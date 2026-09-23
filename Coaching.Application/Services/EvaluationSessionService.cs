@@ -16,6 +16,7 @@ public class EvaluationSessionService(
     IEvaluationParticipantRepository participantRepository,
     IEvaluationPlanRepository planRepository,
     IAnalyticsCapture analytics,
+    IEvaluationAccess access,
     IMapper mapper) : IEvaluationSessionService
 {
     public async Task<EvaluationSessionDto> CreateAsync(CreateEvaluationSessionDto request, Guid coachUserId)
@@ -54,17 +55,22 @@ public class EvaluationSessionService(
             ["has_plan"] = session.EvaluationPlanId.HasValue
         });
 
-        return await GetByIdAsync(session.Id) ?? throw new Exception("Failed to retrieve created session");
+        return await FindAsync(session.Id) ?? throw new Exception("Failed to retrieve created session");
     }
 
-    public async Task<EvaluationSessionDto?> GetByIdAsync(Guid id)
+    public async Task<EvaluationSessionDto> GetByIdForUserAsync(Guid id, Guid userId)
     {
-        var session = await sessionRepository.GetByIdWithParticipantsAsync(id);
-        return session == null ? null : mapper.Map<EvaluationSessionDto>(session);
+        var session = await access.EnsureMayReadSessionAsync(
+            await sessionRepository.GetByIdWithParticipantsAsync(id), userId);
+        return mapper.Map<EvaluationSessionDto>(session);
     }
 
-    public async Task<IEnumerable<EvaluationSessionDto>> GetByClubIdAsync(Guid clubId, int page = 1, int pageSize = 20)
+    public async Task<IEnumerable<EvaluationSessionDto>> GetByClubIdAsync(Guid clubId, Guid userId, int page = 1, int pageSize = 20)
     {
+        // Someone without standing sees what a club with no sessions shows.
+        if (!await access.MayReadClubAsync(clubId, userId))
+            return [];
+
         var sessions = await sessionRepository.GetByClubIdAsync(clubId, page, pageSize);
         return mapper.Map<IEnumerable<EvaluationSessionDto>>(sessions);
     }
@@ -92,7 +98,7 @@ public class EvaluationSessionService(
         sessionRepository.Update(session);
         await sessionRepository.SaveChangesAsync();
 
-        return await GetByIdAsync(id) ?? throw new Exception("Failed to retrieve session");
+        return await FindAsync(id) ?? throw new Exception("Failed to retrieve session");
     }
 
     public async Task DeleteAsync(Guid id, Guid userId)
@@ -134,7 +140,7 @@ public class EvaluationSessionService(
         }
         await participantRepository.SaveChangesAsync();
 
-        return await GetByIdAsync(sessionId) ?? throw new Exception("Failed to retrieve session");
+        return await FindAsync(sessionId) ?? throw new Exception("Failed to retrieve session");
     }
 
     public async Task<EvaluationSessionDto> RemoveParticipantAsync(Guid sessionId, Guid participantId, Guid userId)
@@ -154,6 +160,13 @@ public class EvaluationSessionService(
         participantRepository.Update(participant);
         await participantRepository.SaveChangesAsync();
 
-        return await GetByIdAsync(sessionId) ?? throw new Exception("Failed to retrieve session");
+        return await FindAsync(sessionId) ?? throw new Exception("Failed to retrieve session");
+    }
+
+    /// <summary>The session a write just touched, for its answer: the writer is its coach.</summary>
+    private async Task<EvaluationSessionDto?> FindAsync(Guid id)
+    {
+        var session = await sessionRepository.GetByIdWithParticipantsAsync(id);
+        return session == null ? null : mapper.Map<EvaluationSessionDto>(session);
     }
 }

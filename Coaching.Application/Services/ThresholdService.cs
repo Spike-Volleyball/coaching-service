@@ -11,6 +11,7 @@ namespace Coaching.Application.Services;
 
 public class ThresholdService(
     IRepository<EvaluationThreshold> thresholdRepository,
+    IEvaluationAccess access,
     IMapper mapper) : IThresholdService
 {
     public async Task<EvaluationThresholdDto> CreateAsync(Guid clubId, CreateThresholdDto request, Guid userId)
@@ -38,8 +39,12 @@ public class ThresholdService(
         return mapper.Map<EvaluationThresholdDto>(threshold);
     }
 
-    public async Task<IEnumerable<EvaluationThresholdDto>> GetByClubIdAsync(Guid clubId)
+    public async Task<IEnumerable<EvaluationThresholdDto>> GetByClubIdAsync(Guid clubId, Guid userId)
     {
+        // Someone without standing sees what a club that set no thresholds shows.
+        if (!await access.MayReadClubAsync(clubId, userId))
+            return [];
+
         var thresholds = await thresholdRepository.Query()
             .Where(t => t.ClubId == clubId && !t.IsDeleted)
             .OrderBy(t => t.Skill)

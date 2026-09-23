@@ -24,6 +24,7 @@ public class EvaluationSessionLifecycleService(
     IClubsGrpcClient clubsGrpcClient,
     IScoreCalculationService scoreCalculationService,
     IAnalyticsCapture analytics,
+    IEvaluationAccess access,
     IMapper mapper) : IEvaluationSessionLifecycleService
 {
     public async Task<EvaluationSessionDto> StartSessionAsync(Guid sessionId, Guid userId)
@@ -203,11 +204,10 @@ public class EvaluationSessionLifecycleService(
             await sessionRepository.GetByIdWithParticipantsAsync(sessionId));
     }
 
-    public async Task<SessionProgressDto> GetSessionProgressAsync(Guid sessionId)
+    public async Task<SessionProgressDto> GetSessionProgressAsync(Guid sessionId, Guid userId)
     {
-        var session = await sessionRepository.GetByIdWithParticipantsAsync(sessionId);
-        if (session == null)
-            throw new EntityNotFoundException("Evaluation session not found");
+        var session = await access.EnsureMayReadSessionAsync(
+            await sessionRepository.GetByIdWithParticipantsAsync(sessionId), userId);
 
         var groups = (await groupRepository.GetBySessionIdAsync(sessionId)).ToList();
         var allScores = (await exerciseScoreRepository.GetBySessionIdAsync(sessionId)).ToList();
