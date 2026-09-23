@@ -24,13 +24,8 @@ public class EvaluationSessionService(
         if (string.IsNullOrWhiteSpace(request.Title))
             throw new BadRequestException("Session title is required", ErrorCodeEnum.ValidationError);
 
-        // Validate plan exists if provided
-        if (request.EvaluationPlanId.HasValue)
-        {
-            var plan = await planRepository.GetByIdAsync(request.EvaluationPlanId.Value);
-            if (plan == null)
-                throw new EntityNotFoundException("Evaluation plan not found");
-        }
+        if (request.EvaluationPlanId is { } planId)
+            await EnsureSessionMayUsePlanAsync(planId, request.ClubId, coachUserId);
 
         var session = new EvaluationSession
         {
@@ -90,10 +85,27 @@ public class EvaluationSessionService(
         if (session.CoachUserId != userId)
             throw new ForbiddenException("Only the session coach can update this session");
 
+        // A session moves only through start, pause, resume and complete: those build the scores
+        // the run screen fills and stamp the times. Setting a status here skipped all of that, and
+        // walking a started session back to Draft was a way round the plan rule below.
+        if (request.Status is { } status && status != session.Status)
+            throw new ValidationException("status", "USE_SESSION_ACTIONS",
+                "A session is started, paused, resumed and completed through its own actions");
+
+        if (request.EvaluationPlanId is { } planId && planId != session.EvaluationPlanId)
+        {
+            // Starting builds a score for every player and every exercise of the plan, so a plan
+            // swapped under a started session would leave those scores on exercises it lacks.
+            if (session.Status != EvaluationSessionStatus.Draft)
+                throw new ValidationException("evaluationPlanId", "SESSION_STARTED",
+                    "A session's plan can only change before the session starts");
+
+            await EnsureSessionMayUsePlanAsync(planId, session.ClubId, userId);
+            session.EvaluationPlanId = planId;
+        }
+
         if (request.Title != null) session.Title = request.Title;
         if (request.Description != null) session.Description = request.Description;
-        if (request.EvaluationPlanId.HasValue) session.EvaluationPlanId = request.EvaluationPlanId;
-        if (request.Status.HasValue) session.Status = request.Status.Value;
 
         sessionRepository.Update(session);
         await sessionRepository.SaveChangesAsync();
@@ -161,6 +173,22 @@ public class EvaluationSessionService(
         await participantRepository.SaveChangesAsync();
 
         return await FindAsync(sessionId) ?? throw new Exception("Failed to retrieve session");
+    }
+
+    /// <summary>
+    /// A session may run its coach's own plan, or one of its club's plans the coach may read. Any
+    /// other plan — deleted, unreadable, another club's — answers as a missing one does, so the
+    /// request never confirms that a plan id is real.
+    /// </summary>
+    private async Task EnsureSessionMayUsePlanAsync(Guid planId, Guid sessionClubId, Guid coachUserId)
+    {
+        var plan = await planRepository.GetByIdAsync(planId);
+        var usable = plan is { IsDeleted: false }
+            && (plan.CreatedByUserId == coachUserId
+                || (plan.ClubId == sessionClubId && await access.MayReadPlanAsync(plan, coachUserId)));
+
+        if (!usable)
+            throw new EntityNotFoundException("Evaluation plan not found");
     }
 
     /// <summary>The session a write just touched, for its answer: the writer is its coach.</summary>
