@@ -78,7 +78,8 @@ public class EvaluationAnalyticsTests
         var access = Substitute.For<IEvaluationAccess>();
         access.MayEvaluateInClubAsync(ClubId, CoachId).Returns(true);
         _sessions = new EvaluationSessionService(
-            _sessionRepository, _participantRepository, _planRepository, _analytics, access, mapper);
+            _sessionRepository, _participantRepository, _planRepository,
+            Substitute.For<IEventsGrpcClient>(), _clubsGrpcClient, _analytics, access, mapper);
 
         _lifecycle = new EvaluationSessionLifecycleService(
             _sessionRepository,

@@ -4,6 +4,7 @@ using Coaching.Application.Interfaces.Repositories;
 using Coaching.Application.Interfaces.Services;
 using Coaching.Domain.Enums;
 using Coaching.Domain.Models.Evaluation;
+using Microsoft.EntityFrameworkCore;
 using Shared.DataAccess.Repositories.Interfaces;
 using Shared.Enums;
 using Shared.Exceptions;
@@ -255,13 +256,7 @@ public class EvaluationGroupService(
         currentGroupPlayer.IsDeleted = true;
         groupPlayerRepository.Update(currentGroupPlayer);
 
-        // Add to target group
-        var newGroupPlayer = new EvaluationGroupPlayer
-        {
-            GroupId = dto.TargetGroupId,
-            PlayerId = dto.PlayerId
-        };
-        groupPlayerRepository.Add(newGroupPlayer);
+        await SeatInGroupAsync(dto.TargetGroupId, dto.PlayerId);
         await groupPlayerRepository.SaveChangesAsync();
     }
 
@@ -314,12 +309,23 @@ public class EvaluationGroupService(
                     ErrorCodeEnum.ValidationError);
         }
 
-        var groupPlayer = new EvaluationGroupPlayer
-        {
-            GroupId = groupId,
-            PlayerId = playerId
-        };
-        groupPlayerRepository.Add(groupPlayer);
+        await SeatInGroupAsync(groupId, playerId);
+    }
+
+    /// <summary>
+    /// (GroupId, PlayerId) is uniquely indexed and taking a player off a group only soft-deletes
+    /// the row, so putting them back — or removing them from the session and adding them again —
+    /// brings the row back; inserting a second one would throw 23505.
+    /// </summary>
+    private async Task SeatInGroupAsync(Guid groupId, Guid playerId)
+    {
+        var seat = await groupPlayerRepository.Query()
+            .FirstOrDefaultAsync(p => p.GroupId == groupId && p.PlayerId == playerId);
+
+        if (seat == null)
+            groupPlayerRepository.Add(new EvaluationGroupPlayer { GroupId = groupId, PlayerId = playerId });
+        else
+            seat.IsDeleted = false;
     }
 
     private async Task<EvaluationGroupDto> GetGroupDtoAsync(Guid groupId)

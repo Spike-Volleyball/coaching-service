@@ -236,6 +236,94 @@ public class EvaluationSessionSetupControllerTests
         (await StoredGroupAsync(group.Id)).EvaluatorUserId.Should().BeNull();
     }
 
+    /// <summary>A draft session at an event whose roster is <paramref name="roster"/>.</summary>
+    private async Task<EvaluationSession> SeedEventSessionAsync(EvaluationSessionStatus status, params Guid[] roster)
+    {
+        var session = Session(status);
+        session.EventId = Guid.NewGuid();
+        _factory.EventsGrpcClient.GetEventParticipantIdsAsync(session.EventId.Value).Returns(roster.ToHashSet());
+        await SeedAsync(session);
+        return session;
+    }
+
+    private Task<HttpResponseMessage> AddPlayersAsync(Guid sessionId, params Guid[] playerIds) =>
+        _client.PostAsJsonAsync($"/v1/evaluation-sessions/{sessionId}/participants", new { playerIds, source = "EventParticipant" });
+
+    private async Task<List<(Guid Id, Guid PlayerId)>> LiveParticipantsAsync(Guid sessionId)
+    {
+        using var scope = _factory.Services.CreateScope();
+        return (await scope.ServiceProvider.GetRequiredService<CoachingDbContext>().Set<EvaluationParticipant>().AsNoTracking()
+                .Where(p => p.EvaluationSessionId == sessionId && !p.IsDeleted)
+                .ToListAsync())
+            .Select(p => (p.Id, p.PlayerId))
+            .ToList();
+    }
+
+    [Test]
+    public async Task AddParticipants_ToARunningSession_Returns400AndAddsNobody()
+    {
+        // Arrange — the start built evaluations and scores for the players then in it.
+        var player = Guid.NewGuid();
+        var session = await SeedEventSessionAsync(EvaluationSessionStatus.Running, player);
+        SetAuth(_coachId);
+
+        // Act
+        var response = await AddPlayersAsync(session.Id, player);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await LiveParticipantsAsync(session.Id)).Should().BeEmpty();
+    }
+
+    [Test]
+    public async Task AddParticipants_WithSomeoneNotOnTheEvent_Returns400NamingThemAndAddsNobody()
+    {
+        // Arrange
+        var player = Guid.NewGuid();
+        var session = await SeedEventSessionAsync(EvaluationSessionStatus.Draft, player);
+        SetAuth(_coachId);
+
+        // Act
+        var response = await AddPlayersAsync(session.Id, player, Guid.NewGuid());
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        body.RootElement.GetProperty("errors").EnumerateArray().Select(e => e.GetProperty("field").GetString())
+            .Should().Equal("playerIds[1]");
+        (await LiveParticipantsAsync(session.Id)).Should().BeEmpty();
+    }
+
+    [Test]
+    public async Task RemovingAPlayer_TakesThemOutOfTheirGroup_AndAddingThemBackLetsThemBeGroupedAgain()
+    {
+        // Arrange — both rows are uniquely indexed and removal only soft-deletes, so putting the
+        // player back has to revive them rather than insert a second.
+        var player = Guid.NewGuid();
+        var session = await SeedEventSessionAsync(EvaluationSessionStatus.Draft, player);
+        var group = new EvaluationGroup { SessionId = session.Id, Name = "Court one", Order = 0 };
+        await SeedAsync(group);
+        SetAuth(_coachId);
+        (await AddPlayersAsync(session.Id, player)).StatusCode.Should().Be(HttpStatusCode.OK);
+        var participantId = (await LiveParticipantsAsync(session.Id)).Single().Id;
+        (await _client.PostAsJsonAsync($"/v1/evaluation-sessions/{session.Id}/groups/{group.Id}/players", new { playerId = player }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Act
+        var removed = await _client.DeleteAsync($"/v1/evaluation-sessions/{session.Id}/participants/{participantId}");
+        var groupAfterRemoval = (await ReadSessionAsync(session.Id)).GetProperty("groups")[0].GetProperty("players").GetArrayLength();
+        var addedBack = await AddPlayersAsync(session.Id, player);
+        var regrouped = await _client.PostAsJsonAsync($"/v1/evaluation-sessions/{session.Id}/groups/{group.Id}/players", new { playerId = player });
+
+        // Assert
+        removed.StatusCode.Should().Be(HttpStatusCode.OK, await removed.Content.ReadAsStringAsync());
+        groupAfterRemoval.Should().Be(0);
+        addedBack.StatusCode.Should().Be(HttpStatusCode.OK, await addedBack.Content.ReadAsStringAsync());
+        regrouped.StatusCode.Should().Be(HttpStatusCode.OK, await regrouped.Content.ReadAsStringAsync());
+        (await ReadSessionAsync(session.Id)).GetProperty("groups")[0].GetProperty("players")
+            .EnumerateArray().Select(p => p.GetProperty("playerId").GetGuid()).Should().Equal(player);
+    }
+
     [Test]
     public async Task SubmitScores_ByAnEvaluatorForAPlayerOutsideTheirGroup_Returns403AndScoresNothing()
     {

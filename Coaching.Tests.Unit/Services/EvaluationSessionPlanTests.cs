@@ -47,6 +47,8 @@ public class EvaluationSessionPlanTests : UnitTestBase
             _sessions,
             Substitute.For<IEvaluationParticipantRepository>(),
             _plans,
+            Substitute.For<IEventsGrpcClient>(),
+            Substitute.For<IClubsGrpcClient>(),
             Substitute.For<IAnalyticsCapture>(),
             _access,
             mapper);

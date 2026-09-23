@@ -5,6 +5,8 @@ using Coaching.Application.Interfaces.Repositories;
 using Coaching.Application.Interfaces.Services;
 using Coaching.Domain.Enums;
 using Coaching.Domain.Models.Evaluation;
+using Microsoft.EntityFrameworkCore;
+using Shared.DTOs.Errors;
 using Shared.Enums;
 using Shared.Exceptions;
 using Shared.Services.Analytics;
@@ -15,6 +17,8 @@ public class EvaluationSessionService(
     IEvaluationSessionRepository sessionRepository,
     IEvaluationParticipantRepository participantRepository,
     IEvaluationPlanRepository planRepository,
+    IEventsGrpcClient eventsClient,
+    IClubsGrpcClient clubsClient,
     IAnalyticsCapture analytics,
     IEvaluationAccess access,
     IMapper mapper) : IEvaluationSessionService
@@ -139,19 +143,31 @@ public class EvaluationSessionService(
         if (session.CoachUserId != userId)
             throw new ForbiddenException("Only the session coach can add participants");
 
-        foreach (var playerId in request.PlayerIds)
-        {
-            // Skip if already a participant
-            var existing = await participantRepository.GetBySessionAndPlayerAsync(sessionId, playerId);
-            if (existing != null) continue;
+        EnsureRosterMayChange(session);
+        await EnsureOnRosterAsync(session, request.PlayerIds);
 
-            var participant = new EvaluationParticipant
+        // (EvaluationSessionId, PlayerId) is uniquely indexed and removal only soft-deletes, so a
+        // player added back gets their row back; inserting a second would throw 23505.
+        var rows = await participantRepository.Query()
+            .Where(p => p.EvaluationSessionId == sessionId)
+            .ToDictionaryAsync(p => p.PlayerId);
+
+        foreach (var playerId in request.PlayerIds.Distinct())
+        {
+            if (!rows.TryGetValue(playerId, out var row))
             {
-                EvaluationSessionId = sessionId,
-                PlayerId = playerId,
-                Source = request.Source
-            };
-            participantRepository.Add(participant);
+                participantRepository.Add(new EvaluationParticipant
+                {
+                    EvaluationSessionId = sessionId,
+                    PlayerId = playerId,
+                    Source = request.Source
+                });
+            }
+            else if (row.IsDeleted)
+            {
+                row.IsDeleted = false;
+                row.Source = request.Source;
+            }
         }
         await participantRepository.SaveChangesAsync();
 
@@ -160,22 +176,59 @@ public class EvaluationSessionService(
 
     public async Task<EvaluationSessionDto> RemoveParticipantAsync(Guid sessionId, Guid participantId, Guid userId)
     {
-        var session = await sessionRepository.GetByIdAsync(sessionId);
+        var session = await sessionRepository.GetByIdWithParticipantsAsync(sessionId);
         if (session == null)
             throw new EntityNotFoundException("Evaluation session not found");
 
         if (session.CoachUserId != userId)
             throw new ForbiddenException("Only the session coach can remove participants");
 
-        var participant = await participantRepository.GetByIdAsync(participantId);
-        if (participant == null || participant.EvaluationSessionId != sessionId)
-            throw new EntityNotFoundException("Participant not found");
+        EnsureRosterMayChange(session);
 
+        var participant = session.Participants.FirstOrDefault(p => p.Id == participantId)
+            ?? throw new EntityNotFoundException("Participant not found");
+
+        // Out of the session is out of its groups: a group still holding them is a seat the start
+        // would count and nobody could fill.
         participant.IsDeleted = true;
-        participantRepository.Update(participant);
+        foreach (var seat in session.Groups.SelectMany(g => g.Players).Where(p => p.PlayerId == participant.PlayerId))
+            seat.IsDeleted = true;
+
         await participantRepository.SaveChangesAsync();
 
         return await FindAsync(sessionId) ?? throw new Exception("Failed to retrieve session");
+    }
+
+    /// <summary>
+    /// The start builds an evaluation and a score for every player then in the session, so a player
+    /// added afterwards has nothing to be scored into, and one removed leaves scores behind.
+    /// </summary>
+    private static void EnsureRosterMayChange(EvaluationSession session)
+    {
+        if (session.Status != EvaluationSessionStatus.Draft)
+            throw new BadRequestException(
+                "Players can only be added to or removed from a session before it starts", ErrorCodeEnum.ValidationError);
+    }
+
+    /// <summary>
+    /// A session evaluates the players of the event it is run at, or of its club when it has none;
+    /// anyone else used to be taken, and would have been evaluated against a club they are not in.
+    /// </summary>
+    private async Task EnsureOnRosterAsync(EvaluationSession session, IReadOnlyList<Guid> playerIds)
+    {
+        var roster = session.EventId is { } eventId
+            ? await eventsClient.GetEventParticipantIdsAsync(eventId)
+            : await clubsClient.GetClubMemberIdsAsync(session.ClubId);
+
+        var strangers = playerIds
+            .Select((playerId, index) => (playerId, index))
+            .Where(p => !roster.Contains(p.playerId))
+            .Select(p => new FieldError($"playerIds[{p.index}]", "NOT_ON_ROSTER",
+                session.EventId.HasValue ? "This player is not on the event" : "This player is not in the club"))
+            .ToList();
+
+        if (strangers.Count > 0)
+            throw new ValidationException("Only the session's own players can be evaluated in it", strangers);
     }
 
     /// <summary>
