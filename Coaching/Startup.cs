@@ -25,6 +25,7 @@ using Shared.Security.Access;
 using Shared.Security.Authentication;
 using Shared.Security.Authorization;
 using Shared.Security.Endpoints;
+using Shared.Security.Output;
 using OpenTelemetry.Trace;
 
 namespace Coaching
@@ -51,6 +52,9 @@ namespace Coaching
                     // Replace collections from the request body instead of appending to
                     // pre-populated defaults on the DTO (Newtonsoft's Auto mode appends).
                     options.SerializerSettings.ObjectCreationHandling = Newtonsoft.Json.ObjectCreationHandling.Replace;
+                    // No entity goes out, or comes in as a body: it carries whatever EF had loaded.
+                    options.SerializerSettings.ContractResolver =
+                        new EntityGuardContractResolver(options.SerializerSettings.ContractResolver);
                 });
 
             services.ConfigureProblemDetailsValidation();
@@ -193,6 +197,7 @@ namespace Coaching
                     System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles;
                 options.PayloadSerializerOptions.Converters.Add(
                     new System.Text.Json.Serialization.JsonStringEnumConverter());
+                EntityGuard.Guard(options.PayloadSerializerOptions);
             });
 
             var signalRRedisConnection = Configuration.GetValue<string>("Redis:ConnectionString");
