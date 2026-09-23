@@ -177,10 +177,12 @@ public class FeedbackLinkSchemeTests : UnitTestBase
         // Arrange
         var feedback = CoachesFeedback();
         _feedbackRepository.GetByIdAsync(feedback.Id).Returns(feedback);
+        var point = new ImprovementPoint { FeedbackId = feedback.Id, Description = "Platform" };
+        _pointRepository.GetByIdAsync(point.Id).Returns(point);
         var request = new CreateImprovementPointMediaDto { Url = Hostile, Type = FeedbackMediaType.Video, Source = FeedbackMediaSource.Link };
 
         // Act
-        var act = () => _sut.AddMediaToPointAsync(feedback.Id, Guid.NewGuid(), request, _coachId);
+        var act = () => _sut.AddMediaToPointAsync(feedback.Id, point.Id, request, _coachId);
 
         // Assert
         var error = (await act.Should().ThrowAsync<ValidationException>()).Which;

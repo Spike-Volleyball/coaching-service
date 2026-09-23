@@ -441,9 +441,7 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
-        var point = await pointRepository.GetByIdAsync(pointId);
-        if (point == null || point.FeedbackId != feedbackId)
-            throw new EntityNotFoundException("Improvement point not found");
+        var point = await PointOnFeedbackAsync(feedbackId, pointId);
 
         if (request.Description != null) point.Description = request.Description;
 
@@ -462,9 +460,7 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
-        var point = await pointRepository.GetByIdAsync(pointId);
-        if (point == null || point.FeedbackId != feedbackId)
-            throw new EntityNotFoundException("Improvement point not found");
+        var point = await PointOnFeedbackAsync(feedbackId, pointId);
 
         point.IsDeleted = true;
         pointRepository.Update(point);
@@ -481,6 +477,8 @@ public class FeedbackService(
 
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
+
+        await PointOnFeedbackAsync(feedbackId, pointId);
 
         // Validate drill exists locally (both in coaching-service now)
         var drill = await drillRepository.GetByIdAsync(drillId);
@@ -521,6 +519,8 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
+        await PointOnFeedbackAsync(feedbackId, pointId);
+
         var link = await drillLinkRepository.Query()
             .FirstOrDefaultAsync(l => l.ImprovementPointId == pointId && l.DrillId == drillId);
 
@@ -543,6 +543,7 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
+        await PointOnFeedbackAsync(feedbackId, pointId);
         LinkUrl.EnsureHttp([("url", request.Url)]);
 
         var media = mapper.Map<ImprovementPointMedia>(request);
@@ -562,6 +563,8 @@ public class FeedbackService(
 
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
+
+        await PointOnFeedbackAsync(feedbackId, pointId);
 
         var media = await mediaRepository.GetByIdAsync(mediaId);
         if (media == null || media.ImprovementPointId != pointId)
@@ -668,6 +671,18 @@ public class FeedbackService(
             }
             await mediaRepository.SaveChangesAsync();
         }
+    }
+
+    /// <summary>
+    /// The point a request names, which must be a live one on the feedback it names: the caller was
+    /// authorized against that feedback, so a point from another would be changed on its authority.
+    /// </summary>
+    private async Task<ImprovementPoint> PointOnFeedbackAsync(Guid feedbackId, Guid pointId)
+    {
+        var point = await pointRepository.GetByIdAsync(pointId);
+        if (point == null || point.IsDeleted || point.FeedbackId != feedbackId)
+            throw new EntityNotFoundException("Improvement point not found");
+        return point;
     }
 
     /// <summary>A feedback's own attachments, each named as the request carries it.</summary>
