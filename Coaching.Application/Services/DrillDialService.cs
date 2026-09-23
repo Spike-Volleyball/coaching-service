@@ -256,9 +256,7 @@ public class DrillDialService : IDrillDialService
         return drill;
     }
 
-    private async Task<DrillDto> ReadAsync(Guid drillId, Guid userId) =>
-        await _drillService.GetByIdAsync(drillId, userId)
-        ?? throw new EntityNotFoundException("Drill not found");
+    private Task<DrillDto> ReadAsync(Guid drillId, Guid userId) => _drillService.GetByIdAsync(drillId, userId);
 
     private static DrillDial FindDial(Drill drill, string name) =>
         drill.Dials.FirstOrDefault(d => d.Name == name)

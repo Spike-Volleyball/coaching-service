@@ -7,7 +7,13 @@ public interface IDrillService
 {
     // Drill CRUD
     Task<PagedResponse<DrillDto>> GetByFilterAsync(DrillFilterRequest filter, Guid? userId = null);
-    Task<DrillDto?> GetByIdAsync(Guid id, Guid? userId = null);
+    Task<DrillDto> GetByIdAsync(Guid id, Guid userId);
+
+    /// <summary>
+    /// A public drill is anyone's; a private one is its creator's, and its club's members' when it
+    /// belongs to a club. False for a missing drill.
+    /// </summary>
+    Task<bool> CanReadAsync(Guid id, Guid userId);
     Task<DrillDto> CreateAsync(CreateDrillDto request, Guid userId);
     Task<DrillDto> UpdateAsync(UpdateDrillDto request, Guid userId);
     Task<ImportDrillsResultDto> ImportAsync(ImportDrillsDto request, Guid userId);

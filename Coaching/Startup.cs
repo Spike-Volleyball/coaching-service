@@ -20,6 +20,8 @@ using Shared.Services.Extensions;
 using Shared.Middleware;
 using Shared.Extensions;
 using Shared.Microservices.Extensions;
+using Coaching.Authorization;
+using Shared.Security.Access;
 using Shared.Security.Authentication;
 using Shared.Security.Authorization;
 using Shared.Security.Endpoints;
@@ -174,6 +176,7 @@ namespace Coaching
             // Deny by default: anything that declares nothing needs a signed-in user (SPI-6446).
             services.AddSpikeAuthentication(Configuration);
             services.AddSpikeAuthorization();
+            services.AddScoped<IResourceAuthority<DrillAccess>, DrillAuthority>();
 
             // SignalR
             var signalRBuilder = services.AddSignalR(options =>

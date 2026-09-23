@@ -124,32 +124,26 @@ public class DrillService : IDrillService
         return PagedResponse<DrillDto>.Create(dtos, totalCount, filter.Page, filter.Limit);
     }
 
-    public async Task<DrillDto?> GetByIdAsync(Guid id, Guid? userId = null)
+    public async Task<DrillDto> GetByIdAsync(Guid id, Guid userId)
     {
+        // A drill this reader may not see answers exactly as a missing one does.
         var drill = await _drillRepository.GetByIdWithDetailsAsync(id);
-        if (drill == null) return null;
-
-        // Check visibility
-        if (drill.Visibility == DrillVisibility.Private)
-        {
-            if (!userId.HasValue)
-                throw new ForbiddenException("This drill is private");
-
-            var canRead = drill.CreatedByUserId == userId.Value;
-            if (!canRead && drill.ClubId.HasValue)
-                canRead = await _clubsClient.IsUserClubMemberAsync(userId.Value, drill.ClubId.Value);
-
-            if (!canRead)
-            {
-                throw new ForbiddenException("This drill is private");
-            }
-        }
+        if (drill == null || !await IsReadableAsync(drill, userId))
+            throw new EntityNotFoundException("Drill not found");
 
         var dto = _mapper.Map<DrillDto>(drill);
         await EnrichWithClubInfoAsync([dto]);
         await EnrichWithUserInteractionsAsync([dto], userId);
         return dto;
     }
+
+    public async Task<bool> CanReadAsync(Guid id, Guid userId) =>
+        await _drillRepository.GetByIdAsync(id) is { } drill && await IsReadableAsync(drill, userId);
+
+    private async Task<bool> IsReadableAsync(Drill drill, Guid userId) =>
+        drill.Visibility == DrillVisibility.Public
+        || drill.CreatedByUserId == userId
+        || (drill.ClubId is { } clubId && await _clubsClient.IsUserClubMemberAsync(userId, clubId));
 
     public async Task<DrillDto> CreateAsync(CreateDrillDto request, Guid userId)
     {

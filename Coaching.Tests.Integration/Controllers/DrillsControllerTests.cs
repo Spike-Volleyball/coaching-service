@@ -30,6 +30,34 @@ public class DrillsControllerTests
     private static readonly Guid CreatorId = Guid.NewGuid();
     private static readonly Guid OtherUserId = Guid.NewGuid();
 
+    public sealed record DrillRoute(string Method, string Template)
+    {
+        public override string ToString() => $"{Method} {Template}";
+    }
+
+    private static readonly DrillRoute[] RoutesNamingADrill =
+    [
+        new("GET", "drills/{drill}"),
+        new("PUT", "drills/{drill}"),
+        new("DELETE", "drills/{drill}"),
+        new("POST", "drills/{drill}/dials"),
+        new("PATCH", "drills/{drill}/dials/balls"),
+        new("DELETE", "drills/{drill}/dials/balls"),
+        new("POST", "drills/{drill}/fold"),
+        new("POST", "drills/{drill}/like"),
+        new("DELETE", "drills/{drill}/like"),
+        new("GET", "drills/{drill}/like"),
+        new("POST", "drills/{drill}/bookmark"),
+        new("DELETE", "drills/{drill}/bookmark"),
+        new("POST", "drills/{drill}/comments"),
+        new("GET", "drills/{drill}/comments"),
+        new("DELETE", "drills/{drill}/comments/{sub}"),
+        new("POST", "drills/{drill}/attachments/upload-url"),
+        new("POST", "drills/{drill}/attachments"),
+        new("DELETE", "drills/{drill}/attachments/{sub}"),
+        new("PUT", "drills/{drill}/animations"),
+    ];
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -302,8 +330,8 @@ public class DrillsControllerTests
     [Test]
     public async Task Update_AsDifferentUser_ReturnsForbiddenWithoutChangingDrill()
     {
-        // Arrange
-        var source = NewDrill("Original drill", CreatorId);
+        // Arrange — public, so the reader sees it and only the creator rule is left to refuse them.
+        var source = NewDrill("Original drill", CreatorId, DrillVisibility.Public);
         await SeedAsync([CreatorProfile(), source]);
         SetAuth(OtherUserId);
 
@@ -492,12 +520,50 @@ public class DrillsControllerTests
         // Act / Assert - unrelated user
         SetAuth(OtherUserId);
         var unrelatedResponse = await _client.GetAsync($"/v1/drills/{source.Id}");
-        unrelatedResponse.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        unrelatedResponse.StatusCode.Should().Be(HttpStatusCode.NotFound);
 
         // Act / Assert - creator
         SetAuth(CreatorId);
         var creatorResponse = await _client.GetAsync($"/v1/drills/{source.Id}");
         creatorResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [TestCaseSource(nameof(RoutesNamingADrill))]
+    public async Task StrangerToAPrivateDrill_IsAnsweredAsIfItWereNeverThere(DrillRoute route)
+    {
+        // Arrange — whatever the route goes on to do, nothing about a drill one may not read is
+        // an answer of its own (SPI-6437).
+        var drill = NewDrill("Private drill", CreatorId, DrillVisibility.Private);
+        await SeedAsync([CreatorProfile(), drill]);
+        var missingId = Guid.NewGuid();
+        var subId = Guid.NewGuid();
+        SetAuth(OtherUserId);
+
+        // Act
+        var refused = await SendAsync(route, drill.Id, subId);
+        var neverThere = await SendAsync(route, missingId, subId);
+
+        // Assert
+        refused.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await refused.Content.ReadAsStringAsync()).Replace(drill.Id.ToString(), "{drill}")
+            .Should().Be((await neverThere.Content.ReadAsStringAsync()).Replace(missingId.ToString(), "{drill}"));
+    }
+
+    [Test]
+    public async Task GetComments_OnAPrivateClubDrill_OpenForItsClubsMembers()
+    {
+        // Arrange
+        var clubId = Guid.NewGuid();
+        var drill = NewDrill("Club drill", CreatorId, clubId: clubId);
+        await SeedAsync([CreatorProfile(), drill]);
+        _factory.ClubsGrpcClient.IsUserClubMemberAsync(OtherUserId, clubId).Returns(true);
+        SetAuth(OtherUserId);
+
+        // Act
+        var response = await _client.GetAsync($"/v1/drills/{drill.Id}/comments");
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     [Test]
@@ -510,9 +576,9 @@ public class DrillsControllerTests
         SetAuth(OtherUserId);
         _factory.ClubsGrpcClient.IsUserClubMemberAsync(OtherUserId, clubId).Returns(false);
 
-        // Act / Assert - an authenticated non-member cannot read it
-        var forbidden = await _client.GetAsync($"/v1/drills/{source.Id}");
-        forbidden.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        // Act / Assert - an authenticated non-member cannot read it, or tell it is there
+        var refused = await _client.GetAsync($"/v1/drills/{source.Id}");
+        refused.StatusCode.Should().Be(HttpStatusCode.NotFound);
 
         // Act / Assert - any active club member can read it, regardless of club role
         _factory.ClubsGrpcClient.IsUserClubMemberAsync(OtherUserId, clubId).Returns(true);
@@ -789,6 +855,16 @@ public class DrillsControllerTests
         using var json = JsonDocument.Parse(persisted.Animations!);
         json.RootElement[0].GetProperty("name").GetString().Should().Be("Serve path");
         json.RootElement[0].GetProperty("speed").GetInt32().Should().Be(750);
+    }
+
+    private Task<HttpResponseMessage> SendAsync(DrillRoute route, Guid drillId, Guid subId)
+    {
+        var path = route.Template.Replace("{drill}", drillId.ToString()).Replace("{sub}", subId.ToString());
+        var request = new HttpRequestMessage(new HttpMethod(route.Method), $"/v1/{path}");
+        if (route.Method is "POST" or "PUT" or "PATCH")
+            request.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+
+        return _client.SendAsync(request);
     }
 
     private async Task SeedAsync(IEnumerable<object> entities)
