@@ -32,6 +32,7 @@ public class FeedbackMappingProfileTests : UnitTestBase
         var signer = Substitute.For<IFeedbackMediaUrlSigner>();
         signer.SignReadUrl(Arg.Any<string>()).Returns(call => $"signed:{call.Arg<string>()}");
         signer.IsStored(Arg.Any<string>()).Returns(call => call.Arg<string>().StartsWith("s3://"));
+        signer.ToStoredUrl(Arg.Any<string>()).Returns(call => $"stored:{call.Arg<string>()}");
 
         var services = new ServiceCollection();
         services.AddApplicationMappings();
@@ -117,5 +118,32 @@ public class FeedbackMappingProfileTests : UnitTestBase
 
         // Assert
         dto.Attachments.Select(a => a.Source).Should().Equal(FeedbackMediaSource.File, FeedbackMediaSource.Link);
+    }
+
+    [Test]
+    public void Map_AnAttachmentAClientSent_StoresTheUrlTheSignerWouldKeep()
+    {
+        // Arrange — reads sign on the way out, so writes undo it on the way in: an editor holds a
+        // presigned URL that expires, and storing it would take the player's file with it.
+        var sent = new CreateFeedbackMediaDto { Url = "presigned:photo.jpg", Type = FeedbackMediaType.Image };
+
+        // Act
+        var media = _sut.Map<FeedbackMedia>(sent);
+
+        // Assert
+        media.Url.Should().Be("stored:presigned:photo.jpg");
+    }
+
+    [Test]
+    public void Map_APointsMediaAClientSent_StoresTheUrlTheSignerWouldKeep()
+    {
+        // Arrange
+        var sent = new CreateImprovementPointMediaDto { Url = "presigned:clip.mp4", Type = FeedbackMediaType.Video, Source = FeedbackMediaSource.File };
+
+        // Act
+        var media = _sut.Map<ImprovementPointMedia>(sent);
+
+        // Assert
+        media.Url.Should().Be("stored:presigned:clip.mp4");
     }
 }

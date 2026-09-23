@@ -115,4 +115,56 @@ public class FeedbackMediaUrlSignerTests : UnitTestBase
         // Act & Assert
         _sut.IsStored("").Should().BeFalse();
     }
+
+    [Test]
+    public void ToStoredUrl_APresignedReadOfOurBucket_ReturnsTheBareObjectUrl()
+    {
+        // Arrange — what an editor holds after a read, and sends back when it re-adds a file.
+        var presigned = $"{PublicBaseUrl}/feedback/coach-1/file-1.jpg" +
+            "?X-Amz-Expires=86400&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIA%2F20260923&X-Amz-Signature=abc";
+
+        // Act
+        var result = _sut.ToStoredUrl(presigned);
+
+        // Assert
+        result.Should().Be($"{PublicBaseUrl}/feedback/coach-1/file-1.jpg");
+    }
+
+    [Test]
+    public void ToStoredUrl_TheBareObjectUrlAnUploadReturned_IsKeptAsItIs()
+    {
+        // Arrange
+        var uploaded = $"{PublicBaseUrl}/feedback/coach-1/file-1.jpg";
+
+        // Act & Assert
+        _sut.ToStoredUrl(uploaded).Should().Be(uploaded);
+    }
+
+    [Test]
+    public void ToStoredUrl_OurBucketWrittenInAnotherCase_IsStoredUnderTheConfiguredBase()
+    {
+        // Act
+        var result = _sut.ToStoredUrl($"{PublicBaseUrl.ToUpperInvariant()}/feedback/coach-1/file-1.jpg?X-Amz-Signature=abc");
+
+        // Assert
+        result.Should().Be($"{PublicBaseUrl}/feedback/coach-1/file-1.jpg");
+    }
+
+    [Test]
+    public void ToStoredUrl_AnExternalLink_KeepsItsQuery()
+    {
+        // Arrange — a link's query is part of where it points.
+        var external = "https://www.youtube.com/watch?v=abc&t=42";
+
+        // Act & Assert
+        _sut.ToStoredUrl(external).Should().Be(external);
+    }
+
+    [Test]
+    public void ToStoredUrl_TrimsTheWhitespaceAroundAUrl()
+    {
+        // Act & Assert
+        _sut.ToStoredUrl($"  {PublicBaseUrl}/feedback/coach-1/file-1.jpg  ").Should().Be($"{PublicBaseUrl}/feedback/coach-1/file-1.jpg");
+        _sut.ToStoredUrl("  https://youtu.be/abc ").Should().Be("https://youtu.be/abc");
+    }
 }

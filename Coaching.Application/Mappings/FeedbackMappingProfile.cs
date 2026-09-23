@@ -31,7 +31,9 @@ public class FeedbackMappingProfile : Profile
         CreateMap<FeedbackMedia, FeedbackMediaDto>()
             .ForMember(d => d.Url, opt => opt.MapFrom<SignedFeedbackMediaUrlResolver>())
             .ForMember(d => d.Source, opt => opt.MapFrom<FeedbackMediaSourceResolver>());
+        // Reads sign a stored file's URL on the way out, so writes undo it on the way in.
         CreateMap<CreateFeedbackMediaDto, FeedbackMedia>()
+            .ForMember(d => d.Url, opt => opt.MapFrom<StoredFeedbackMediaUrlResolver>())
             .ForMember(d => d.Id, opt => opt.Ignore())
             .ForMember(d => d.FeedbackId, opt => opt.Ignore())
             .ForMember(d => d.Order, opt => opt.Ignore())
@@ -60,6 +62,7 @@ public class FeedbackMappingProfile : Profile
             .ForMember(d => d.MediaLinks, opt => opt.Ignore());
 
         CreateMap<CreateImprovementPointMediaDto, ImprovementPointMedia>()
+            .ForMember(d => d.Url, opt => opt.MapFrom<StoredImprovementPointMediaUrlResolver>())
             .ForMember(d => d.Id, opt => opt.Ignore())
             .ForMember(d => d.ImprovementPointId, opt => opt.Ignore())
             .ForMember(d => d.ImprovementPoint, opt => opt.Ignore());
@@ -90,4 +93,18 @@ public class SignedImprovementPointMediaUrlResolver(IFeedbackMediaUrlSigner sign
 {
     public string Resolve(ImprovementPointMedia source, ImprovementPointMediaDto destination, string destMember, ResolutionContext context) =>
         signer.SignReadUrl(source.Url);
+}
+
+public class StoredFeedbackMediaUrlResolver(IFeedbackMediaUrlSigner signer)
+    : IValueResolver<CreateFeedbackMediaDto, FeedbackMedia, string>
+{
+    public string Resolve(CreateFeedbackMediaDto source, FeedbackMedia destination, string destMember, ResolutionContext context) =>
+        signer.ToStoredUrl(source.Url);
+}
+
+public class StoredImprovementPointMediaUrlResolver(IFeedbackMediaUrlSigner signer)
+    : IValueResolver<CreateImprovementPointMediaDto, ImprovementPointMedia, string>
+{
+    public string Resolve(CreateImprovementPointMediaDto source, ImprovementPointMedia destination, string destMember, ResolutionContext context) =>
+        signer.ToStoredUrl(source.Url);
 }

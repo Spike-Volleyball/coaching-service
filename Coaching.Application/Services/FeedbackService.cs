@@ -277,6 +277,7 @@ public class FeedbackService(
             removed.IsDeleted = true;
 
         // A kept row keeps its stored Url whatever the entry says: reads hand out presigned URLs.
+        // A new row maps like a created one, so a presigned URL is stored bare there too.
         // New rows go through Add, not through the tracked parent's collection — BaseEntity sets
         // every Id at construction, and a keyed child found only by navigation saves as an UPDATE.
         for (var order = 0; order < attachments.Count; order++)
@@ -291,14 +292,10 @@ public class FeedbackService(
                 continue;
             }
 
-            feedbackMediaRepository.Add(new FeedbackMedia
-            {
-                FeedbackId = feedbackId,
-                Url = entry.Url,
-                Type = entry.Type,
-                Title = entry.Title,
-                Order = order,
-            });
+            var added = mapper.Map<CreateFeedbackMediaDto, FeedbackMedia>(entry);
+            added.FeedbackId = feedbackId;
+            added.Order = order;
+            feedbackMediaRepository.Add(added);
         }
     }
 
