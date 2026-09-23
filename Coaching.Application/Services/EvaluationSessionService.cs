@@ -21,6 +21,7 @@ public class EvaluationSessionService(
     IClubsGrpcClient clubsClient,
     IAnalyticsCapture analytics,
     IEvaluationAccess access,
+    IEvaluationPeople people,
     IMapper mapper) : IEvaluationSessionService
 {
     public async Task<EvaluationSessionDto> CreateAsync(CreateEvaluationSessionDto request, Guid coachUserId)
@@ -64,7 +65,7 @@ public class EvaluationSessionService(
     {
         var session = await access.EnsureMayReadSessionAsync(
             await sessionRepository.GetByIdWithParticipantsAsync(id), userId);
-        return mapper.Map<EvaluationSessionDto>(session);
+        return await ToDtoAsync(session);
     }
 
     public async Task<IEnumerable<EvaluationSessionDto>> GetByClubIdAsync(Guid clubId, Guid userId, int page = 1, int pageSize = 20)
@@ -251,6 +252,13 @@ public class EvaluationSessionService(
     private async Task<EvaluationSessionDto?> FindAsync(Guid id)
     {
         var session = await sessionRepository.GetByIdWithParticipantsAsync(id);
-        return session == null ? null : mapper.Map<EvaluationSessionDto>(session);
+        return session == null ? null : await ToDtoAsync(session);
+    }
+
+    private async Task<EvaluationSessionDto> ToDtoAsync(EvaluationSession session)
+    {
+        var dto = mapper.Map<EvaluationSessionDto>(session);
+        await people.FillAsync(dto.Groups);
+        return dto;
     }
 }

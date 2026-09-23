@@ -51,6 +51,7 @@ public class EvaluationSessionPlanTests : UnitTestBase
             Substitute.For<IClubsGrpcClient>(),
             Substitute.For<IAnalyticsCapture>(),
             _access,
+            Substitute.For<IEvaluationPeople>(),
             mapper);
     }
 

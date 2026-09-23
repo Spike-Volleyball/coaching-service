@@ -17,6 +17,7 @@ public class EvaluationGroupService(
     IEvaluationParticipantRepository participantRepository,
     IRepository<EvaluationGroupPlayer> groupPlayerRepository,
     IEvaluationAccess access,
+    IEvaluationPeople people,
     IMapper mapper) : IEvaluationGroupService
 {
     public async Task<EvaluationGroupDto> CreateGroupAsync(Guid sessionId, CreateGroupDto dto, Guid userId)
@@ -330,8 +331,9 @@ public class EvaluationGroupService(
 
     private async Task<EvaluationGroupDto> GetGroupDtoAsync(Guid groupId)
     {
-        var group = await groupRepository.GetByIdWithPlayersAsync(groupId);
-        return mapper.Map<EvaluationGroupDto>(group);
+        var group = mapper.Map<EvaluationGroupDto>(await groupRepository.GetByIdWithPlayersAsync(groupId));
+        await people.FillAsync([group]);
+        return group;
     }
 
     private static List<string> GenerateGroupNames(int count)

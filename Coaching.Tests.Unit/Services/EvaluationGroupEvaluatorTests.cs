@@ -49,6 +49,7 @@ public class EvaluationGroupEvaluatorTests : UnitTestBase
             Substitute.For<IEvaluationParticipantRepository>(),
             Substitute.For<IRepository<EvaluationGroupPlayer>>(),
             _access,
+            Substitute.For<IEvaluationPeople>(),
             mapper);
     }
 

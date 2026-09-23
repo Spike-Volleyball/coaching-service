@@ -14,6 +14,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
 using NSubstitute;
+using Shared.Models;
 
 namespace Coaching.Tests.Integration.Controllers;
 
@@ -367,6 +368,50 @@ public class EvaluationSessionSetupControllerTests
         // Assert
         response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
         (await ScoredPlayersAsync(run.SessionId)).Should().Equal(run.SecondPlayer);
+    }
+
+    private static UserProfile Profile(string name, string surname, string? imageUrl = null) =>
+        new() { Name = name, Surname = surname, ImageUrl = imageUrl, Email = $"{name}.{surname}@test.local".ToLowerInvariant(), IsActive = true };
+
+    [Test]
+    public async Task GetSession_NamesEachGroupsEvaluatorAndSeatedPlayers()
+    {
+        // Arrange
+        var evaluator = Profile("Casey", "Coach");
+        var player = Profile("Pat", "Player", "https://cdn.test/pat.jpg");
+        var session = Session();
+        var group = new EvaluationGroup { SessionId = session.Id, Name = "Court one", Order = 0, EvaluatorUserId = evaluator.Id };
+        await SeedAsync(evaluator, player, session, group, new EvaluationGroupPlayer { GroupId = group.Id, PlayerId = player.Id });
+        SetAuth(_coachId);
+
+        // Act
+        var read = await ReadSessionAsync(session.Id);
+
+        // Assert
+        var readGroup = read.GetProperty("groups")[0];
+        readGroup.GetProperty("evaluatorName").GetString().Should().Be("Casey Coach");
+        var seat = readGroup.GetProperty("players")[0];
+        seat.GetProperty("playerName").GetString().Should().Be("Pat Player");
+        seat.GetProperty("avatarUrl").GetString().Should().Be("https://cdn.test/pat.jpg");
+    }
+
+    [Test]
+    public async Task GetProgress_NamesEachGroupsEvaluator()
+    {
+        // Arrange
+        var evaluator = Profile("Casey", "Coach");
+        var session = Session();
+        var group = new EvaluationGroup { SessionId = session.Id, Name = "Court one", Order = 0, EvaluatorUserId = evaluator.Id };
+        await SeedAsync(evaluator, session, group);
+        SetAuth(_coachId);
+
+        // Act
+        var response = await _client.GetAsync($"/v1/evaluation-sessions/{session.Id}/progress");
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        body.RootElement.GetProperty("groups")[0].GetProperty("evaluatorName").GetString().Should().Be("Casey Coach");
     }
 
     [Test]

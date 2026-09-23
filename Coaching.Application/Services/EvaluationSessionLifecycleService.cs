@@ -25,6 +25,7 @@ public class EvaluationSessionLifecycleService(
     IScoreCalculationService scoreCalculationService,
     IAnalyticsCapture analytics,
     IEvaluationAccess access,
+    IEvaluationPeople people,
     IMapper mapper) : IEvaluationSessionLifecycleService
 {
     public async Task<EvaluationSessionDto> StartSessionAsync(Guid sessionId, Guid userId)
@@ -131,8 +132,7 @@ public class EvaluationSessionLifecycleService(
             ["exercise_count"] = plan.Items.Count
         });
 
-        return mapper.Map<EvaluationSessionDto>(
-            await sessionRepository.GetByIdWithParticipantsAsync(sessionId));
+        return await MapSessionAsync(sessionId);
     }
 
     public async Task<EvaluationSessionDto> PauseSessionAsync(Guid sessionId, Guid userId)
@@ -148,8 +148,7 @@ public class EvaluationSessionLifecycleService(
         sessionRepository.Update(session);
         await sessionRepository.SaveChangesAsync();
 
-        return mapper.Map<EvaluationSessionDto>(
-            await sessionRepository.GetByIdWithParticipantsAsync(sessionId));
+        return await MapSessionAsync(sessionId);
     }
 
     public async Task<EvaluationSessionDto> ResumeSessionAsync(Guid sessionId, Guid userId)
@@ -165,8 +164,7 @@ public class EvaluationSessionLifecycleService(
         sessionRepository.Update(session);
         await sessionRepository.SaveChangesAsync();
 
-        return mapper.Map<EvaluationSessionDto>(
-            await sessionRepository.GetByIdWithParticipantsAsync(sessionId));
+        return await MapSessionAsync(sessionId);
     }
 
     public async Task<EvaluationSessionDto> CompleteSessionAsync(Guid sessionId, Guid userId)
@@ -200,8 +198,7 @@ public class EvaluationSessionLifecycleService(
             ["duration_seconds"] = (int)((session.CompletedAt - session.StartedAt)?.TotalSeconds ?? 0)
         });
 
-        return mapper.Map<EvaluationSessionDto>(
-            await sessionRepository.GetByIdWithParticipantsAsync(sessionId));
+        return await MapSessionAsync(sessionId);
     }
 
     public async Task<SessionProgressDto> GetSessionProgressAsync(Guid sessionId, Guid userId)
@@ -282,7 +279,7 @@ public class EvaluationSessionLifecycleService(
             });
         }
 
-        return new SessionProgressDto
+        var progress = new SessionProgressDto
         {
             SessionId = sessionId,
             Status = session.Status,
@@ -293,6 +290,8 @@ public class EvaluationSessionLifecycleService(
             OverallProgress = totalPossible > 0 ? Math.Round((decimal)totalScored / totalPossible * 100, 1) : 0,
             Groups = groupProgressList
         };
+        await people.FillAsync(progress);
+        return progress;
     }
 
     public async Task UpdateSharingAsync(Guid sessionId, UpdateSharingDto dto, Guid userId)
@@ -440,6 +439,13 @@ public class EvaluationSessionLifecycleService(
         }
 
         return (participants.Count, allScores.Count(s => s.Status == EvaluationScoreStatus.Scored));
+    }
+
+    private async Task<EvaluationSessionDto> MapSessionAsync(Guid sessionId)
+    {
+        var dto = mapper.Map<EvaluationSessionDto>(await sessionRepository.GetByIdWithParticipantsAsync(sessionId));
+        await people.FillAsync(dto.Groups);
+        return dto;
     }
 
     private async Task<EvaluationSession> GetSessionAndValidateOwnership(Guid sessionId, Guid userId)

@@ -64,6 +64,7 @@ public class EvaluationSessionParticipantsTests : UnitTestBase
             _clubs,
             Substitute.For<IAnalyticsCapture>(),
             Substitute.For<IEvaluationAccess>(),
+            Substitute.For<IEvaluationPeople>(),
             mapper);
     }
 
