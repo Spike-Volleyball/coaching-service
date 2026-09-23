@@ -26,9 +26,10 @@ public class EvaluationAccess(IClubsGrpcClient clubs, IEvaluationGroupRepository
         return session;
     }
 
-    public async Task<bool> MayReadExerciseAsync(EvaluationExercise exercise, Guid? userId) =>
+    public async Task<bool> MayReadExerciseAsync(EvaluationExercise exercise, Guid userId) =>
         exercise.ClubId is not { } clubId
-        || (userId is { } reader && (exercise.CreatedByUserId == reader || await MayReadClubAsync(clubId, reader)));
+        || exercise.CreatedByUserId == userId
+        || await MayReadClubAsync(clubId, userId);
 
     private async Task<bool> MayReadSessionAsync(EvaluationSession session, Guid userId) =>
         session.CoachUserId == userId

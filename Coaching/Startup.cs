@@ -1,9 +1,7 @@
 using Asp.Versioning;
 using Coaching.Application.Extensions;
 using Coaching.Infrastructure.Data.Context;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.IdentityModel.Tokens;
 using Coaching.Application.Interfaces.Repositories;
 using Coaching.Application.Interfaces.Services;
 using Coaching.Infrastructure.Repositories;
@@ -19,10 +17,12 @@ using Shared.Messaging.Extensions;
 using Shared.Options;
 using Shared.Services.Analytics;
 using Shared.Services.Extensions;
-using System.Text;
 using Shared.Middleware;
 using Shared.Extensions;
 using Shared.Microservices.Extensions;
+using Shared.Security.Authentication;
+using Shared.Security.Authorization;
+using Shared.Security.Endpoints;
 using OpenTelemetry.Trace;
 
 namespace Coaching
@@ -153,10 +153,6 @@ namespace Coaching
                 options.Configuration = Configuration.GetValue<string>("Redis:ConnectionString");
             });
 
-            // JWT & Auth
-            services.Configure<JwtSettings>(Configuration.GetSection("Jwt"));
-            var jwtSettings = Configuration.GetSection("Jwt").Get<JwtSettings>();
-
             services.AddMessaging<CoachingDbContext>(options =>
             {
                 options.Host = Configuration["RabbitMQ:Host"] ?? "localhost";
@@ -175,39 +171,9 @@ namespace Coaching
                 bus.AddRetryingConsumer<Coaching.Application.Consumers.UserDeletionConfirmedConsumer>();
             });
 
-            if (jwtSettings != null)
-            {
-                services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-                    .AddJwtBearer(options =>
-                    {
-                        options.TokenValidationParameters = new TokenValidationParameters
-                        {
-                            ValidateIssuerSigningKey = true,
-                            IssuerSigningKey = new SymmetricSecurityKey(Encoding.ASCII.GetBytes(jwtSettings.Secret)),
-                            ValidateIssuer = true,
-                            ValidIssuer = jwtSettings.Issuer,
-                            ValidateAudience = true,
-                            ValidAudience = jwtSettings.Audience,
-                            ValidateLifetime = true,
-                            ClockSkew = TimeSpan.Zero
-                        };
-                        options.Events = new JwtBearerEvents
-                        {
-                            OnMessageReceived = context =>
-                            {
-                                var accessToken = context.Request.Query["access_token"];
-                                var path = context.HttpContext.Request.Path;
-                                if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs"))
-                                {
-                                    context.Token = accessToken;
-                                }
-                                return Task.CompletedTask;
-                            }
-                        };
-                    });
-            }
-
-            services.AddAuthorization();
+            // Deny by default: anything that declares nothing needs a signed-in user (SPI-6446).
+            services.AddSpikeAuthentication(Configuration);
+            services.AddSpikeAuthorization();
 
             // SignalR
             var signalRBuilder = services.AddSignalR(options =>
@@ -285,14 +251,16 @@ namespace Coaching
             // After the error handler: the refusal it throws must be shaped into a 400, not escape as a 500.
             app.UseMiddleware<GuardianContextMiddleware>();
 
+            var internalListenerPort = Configuration.GetInternalListenerPort();
             app.UseEndpoints(endpoints =>
             {
                 endpoints.MapControllers();
                 endpoints.MapHub<Coaching.Hubs.EvaluationHub>("/hubs/evaluation");
                 endpoints.MapHub<Coaching.Hubs.TrainingRunHub>("/hubs/trainingrun");
-                endpoints.MapGrpcService<Grpc.CoachingInternalServiceImpl>();
-                endpoints.MapHealthChecks("/health");
-                endpoints.MapGrpcHealthChecksService();
+                endpoints.MapInternalGrpcService<Grpc.CoachingInternalServiceImpl>(internalListenerPort);
+                endpoints.MapHealthChecks("/health")
+                    .AllowPublic("Liveness probe for Docker and the gateway; reports no data");
+                endpoints.MapGrpcHealthChecksService().RequireInternalListener(internalListenerPort);
             });
         }
     }

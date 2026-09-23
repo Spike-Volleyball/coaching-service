@@ -38,8 +38,8 @@ public interface IEvaluationAccess
     Task<EvaluationSession> EnsureMayReadSessionAsync(EvaluationSession? session, Guid userId);
 
     /// <summary>
-    /// An exercise outside any club is the public library's, open even to an anonymous reader; a
+    /// An exercise outside any club is the public library's, open to any signed-in reader; a
     /// club's is its author's and its staff's.
     /// </summary>
-    Task<bool> MayReadExerciseAsync(EvaluationExercise exercise, Guid? userId);
+    Task<bool> MayReadExerciseAsync(EvaluationExercise exercise, Guid userId);
 }

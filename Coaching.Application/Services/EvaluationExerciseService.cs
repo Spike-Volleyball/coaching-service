@@ -43,21 +43,13 @@ public class EvaluationExerciseService(
         return await FindAsync(exercise.Id) ?? throw new Exception("Failed to retrieve created exercise");
     }
 
-    public async Task<EvaluationExerciseDto> GetByIdForUserAsync(Guid id, Guid? userId)
+    public async Task<EvaluationExerciseDto> GetByIdForUserAsync(Guid id, Guid userId)
     {
-        // JwtPayloadProvider hands an anonymous caller Guid.Empty rather than null; collapsing it
-        // keeps an anonymous read from being asked about as a club question about nobody.
-        var readerId = userId is { } user && user != Guid.Empty ? user : (Guid?)null;
         var exercise = await exerciseRepository.GetByIdWithMetricsAsync(id);
 
-        // A refusal answers as a missing exercise does: a 404 for a signed-in reader, and for an
-        // anonymous one the same 401 either way, so a public link can still prompt a sign-in.
-        if (exercise == null || !await access.MayReadExerciseAsync(exercise, readerId))
-            throw readerId.HasValue
-                ? new EntityNotFoundException(ExerciseNotFound)
-                : new UnauthorizedException(
-                    "Only logged in users have access to this functionality. Please, login.",
-                    ErrorCodeEnum.Unauthorized);
+        // A refusal answers as a missing exercise does, so a stranger cannot tell the two apart.
+        if (exercise == null || !await access.MayReadExerciseAsync(exercise, userId))
+            throw new EntityNotFoundException(ExerciseNotFound);
 
         return mapper.Map<EvaluationExerciseDto>(exercise);
     }

@@ -1484,6 +1484,7 @@
           "Shared.Messaging": "[1.0.0, )",
           "Shared.Messaging.Contracts": "[1.0.0, )",
           "Shared.Microservices": "[1.0.0, )",
+          "Shared.Security": "[1.0.0, )",
           "Shared.Services": "[1.0.0, )",
           "Swashbuckle.AspNetCore": "[10.0.1, )"
         }
@@ -1587,6 +1588,16 @@
           "prometheus-net.AspNetCore": "[8.2.1, )"
         }
       },
+      "shared.security": {
+        "type": "Project",
+        "dependencies": {
+          "Grpc.AspNetCore.Server": "[2.71.0, )",
+          "Microsoft.AspNetCore.Authentication.JwtBearer": "[10.0.0, )",
+          "Newtonsoft.Json": "[13.0.3, )",
+          "Shared": "[1.0.0, )",
+          "Shared.Microservices": "[1.0.0, )"
+        }
+      },
       "shared.services": {
         "type": "Project",
         "dependencies": {
@@ -1622,6 +1633,14 @@
           "Npgsql": "[10.0.0, )",
           "Respawn": "[7.0.0, )",
           "Testcontainers.PostgreSql": "[4.9.0, )"
+        }
+      },
+      "shared.testing.security": {
+        "type": "Project",
+        "dependencies": {
+          "Shared": "[1.0.0, )",
+          "Shared.Logging": "[1.0.0, )",
+          "Shared.Security": "[1.0.0, )"
         }
       }
     }

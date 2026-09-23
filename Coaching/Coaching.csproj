@@ -13,6 +13,7 @@
     <ProjectReference Include="..\shared\Shared.Messaging\Shared.Messaging.csproj" />
     <ProjectReference Include="..\shared\Shared.Logging\Shared.Logging.csproj" />
     <ProjectReference Include="..\shared\Shared.Microservices\Shared.Microservices.csproj" />
+    <ProjectReference Include="..\shared\Shared.Security\Shared.Security.csproj" />
     <ProjectReference Include="..\shared\Shared.Services\Shared.Services.csproj" />
   </ItemGroup>
   <ItemGroup>

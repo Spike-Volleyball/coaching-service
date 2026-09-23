@@ -192,34 +192,30 @@ public class EvaluationAccessTests : UnitTestBase
     }
 
     [Test]
-    public async Task MayReadExerciseAsync_OutsideAnyClub_ReturnsTrueEvenAnonymously()
+    public async Task MayReadExerciseAsync_OutsideAnyClub_ReturnsTrueForAnyReader()
     {
         // Arrange — an exercise with no club is the public library's.
         var exercise = new EvaluationExercise { Name = "Serve receive", ClubId = null, CreatedByUserId = _authorId };
 
         // Act
-        var anonymous = await _sut.MayReadExerciseAsync(exercise, null);
         var stranger = await _sut.MayReadExerciseAsync(exercise, _strangerId);
 
         // Assert
-        anonymous.Should().BeTrue();
         stranger.Should().BeTrue();
     }
 
     [TestCase("author", true)]
     [TestCase("staff", true)]
     [TestCase("stranger", false)]
-    [TestCase("anonymous", false)]
     public async Task MayReadExerciseAsync_OfAClub_ReturnsWhetherTheReaderWroteItOrRunsTheClub(string reader, bool expected)
     {
         // Arrange
         var exercise = new EvaluationExercise { Name = "Serve receive", ClubId = _clubId, CreatedByUserId = _authorId };
-        Guid? readerId = reader switch
+        var readerId = reader switch
         {
             "author" => _authorId,
             "staff" => _staffId,
-            "stranger" => _strangerId,
-            _ => null,
+            _ => _strangerId,
         };
 
         // Act

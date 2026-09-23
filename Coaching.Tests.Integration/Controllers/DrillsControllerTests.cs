@@ -461,11 +461,12 @@ public class DrillsControllerTests
     }
 
     [Test]
-    public async Task GetById_PublicDrill_AllowsAnonymousRead()
+    public async Task GetById_PublicDrill_OpensForAnySignedInReader()
     {
         // Arrange
         var source = NewDrill("Public drill", CreatorId, DrillVisibility.Public);
         await SeedAsync([CreatorProfile(), source]);
+        SetAuth(OtherUserId);
 
         // Act
         var response = await _client.GetAsync($"/v1/drills/{source.Id}");
@@ -486,7 +487,7 @@ public class DrillsControllerTests
 
         // Act / Assert - anonymous
         var anonymousResponse = await _client.GetAsync($"/v1/drills/{source.Id}");
-        anonymousResponse.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        anonymousResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
 
         // Act / Assert - unrelated user
         SetAuth(OtherUserId);
@@ -522,12 +523,13 @@ public class DrillsControllerTests
     }
 
     [Test]
-    public async Task GetDrills_AnonymousListingReturnsPublicDrillsOnly()
+    public async Task GetDrills_AStrangersListingReturnsPublicDrillsOnly()
     {
         // Arrange
         var publicDrill = NewDrill("Public drill", CreatorId, DrillVisibility.Public);
         var privateDrill = NewDrill("Private drill", CreatorId, DrillVisibility.Private);
         await SeedAsync([CreatorProfile(), publicDrill, privateDrill]);
+        SetAuth(OtherUserId);
 
         // Act
         var response = await _client.GetAsync("/v1/drills");
@@ -552,6 +554,7 @@ public class DrillsControllerTests
             seedDb.DrillDials.Add(new DrillDial { DrillId = source.Id, Name = "balls", Kind = DialKind.Number, DefaultValue = "5" });
             await seedDb.SaveChangesAsync();
         }
+        SetAuth(OtherUserId);
 
         // Act
         var response = await _client.GetAsync("/v1/drills");
