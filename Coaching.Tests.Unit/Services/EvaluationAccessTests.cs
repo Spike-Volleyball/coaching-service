@@ -191,6 +191,41 @@ public class EvaluationAccessTests : UnitTestBase
         await act.Should().ThrowAsync<EntityNotFoundException>();
     }
 
+    [TestCase("coach", false, true)]
+    [TestCase("evaluator", false, true)]
+    [TestCase("staff", false, true)]
+    [TestCase("stranger", false, false)]
+    [TestCase("coach", true, false)]
+    public async Task MayReadSessionAsync_AnswersAsEnsureMayReadSessionAsyncDecides(string reader, bool deleted, bool expected)
+    {
+        // Arrange — the evaluation hub asks this before a connection joins the session's room.
+        var session = Session();
+        session.IsDeleted = deleted;
+        var readerId = reader switch
+        {
+            "coach" => _coachId,
+            "evaluator" => _evaluatorId,
+            "staff" => _staffId,
+            _ => _strangerId,
+        };
+
+        // Act
+        var mayRead = await _sut.MayReadSessionAsync(session, readerId);
+
+        // Assert
+        mayRead.Should().Be(expected);
+    }
+
+    [Test]
+    public async Task MayReadSessionAsync_ForAMissingSession_IsFalse()
+    {
+        // Act
+        var mayRead = await _sut.MayReadSessionAsync(null, _coachId);
+
+        // Assert
+        mayRead.Should().BeFalse();
+    }
+
     [Test]
     public async Task MayReadExerciseAsync_OutsideAnyClub_ReturnsTrueForAnyReader()
     {

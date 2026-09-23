@@ -177,6 +177,8 @@ namespace Coaching
             services.AddSpikeAuthentication(Configuration);
             services.AddSpikeAuthorization();
             services.AddScoped<IResourceAuthority<DrillAccess>, DrillAuthority>();
+            services.AddScoped<IResourceAuthority<EvaluationSessionAccess>, EvaluationSessionAuthority>();
+            services.AddScoped<IResourceAuthority<RunAccess>, RunAuthority>();
 
             // SignalR
             var signalRBuilder = services.AddSignalR(options =>

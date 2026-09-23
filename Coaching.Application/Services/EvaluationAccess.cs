@@ -19,20 +19,17 @@ public class EvaluationAccess(IClubsGrpcClient clubs, IEvaluationGroupRepository
         plan.CreatedByUserId == userId
         || (plan.ClubId is { } clubId && await MayReadClubAsync(clubId, userId));
 
-    public async Task<EvaluationSession> EnsureMayReadSessionAsync(EvaluationSession? session, Guid userId)
-    {
-        if (session == null || session.IsDeleted || !await MayReadSessionAsync(session, userId))
-            throw new EntityNotFoundException(SessionNotFound);
-        return session;
-    }
+    public async Task<EvaluationSession> EnsureMayReadSessionAsync(EvaluationSession? session, Guid userId) =>
+        await MayReadSessionAsync(session, userId) ? session! : throw new EntityNotFoundException(SessionNotFound);
+
+    public async Task<bool> MayReadSessionAsync(EvaluationSession? session, Guid userId) =>
+        session is { IsDeleted: false }
+        && (session.CoachUserId == userId
+            || await groups.IsEvaluatorAsync(session.Id, userId)
+            || await MayReadClubAsync(session.ClubId, userId));
 
     public async Task<bool> MayReadExerciseAsync(EvaluationExercise exercise, Guid userId) =>
         exercise.ClubId is not { } clubId
         || exercise.CreatedByUserId == userId
         || await MayReadClubAsync(clubId, userId);
-
-    private async Task<bool> MayReadSessionAsync(EvaluationSession session, Guid userId) =>
-        session.CoachUserId == userId
-        || await groups.IsEvaluatorAsync(session.Id, userId)
-        || await MayReadClubAsync(session.ClubId, userId);
 }
