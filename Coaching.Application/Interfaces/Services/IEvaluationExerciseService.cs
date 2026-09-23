@@ -10,7 +10,7 @@ public interface IEvaluationExerciseService
     /// staff. A refusal raises what a missing exercise does — not-found when signed in, a request
     /// to sign in when not.
     /// </summary>
-    Task<EvaluationExerciseDto> GetByIdForUserAsync(Guid id, Guid? userId);
+    Task<EvaluationExerciseDto> GetByIdForUserAsync(Guid id, Guid userId);
 
     /// <summary>A club's exercises for its staff; anyone else gets the empty list a club with none gives.</summary>
     Task<IEnumerable<EvaluationExerciseDto>> GetByClubIdAsync(Guid clubId, Guid userId);

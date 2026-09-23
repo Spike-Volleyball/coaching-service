@@ -69,12 +69,23 @@ public class RunService : IRunService
     // events-service participant roster.
     private async Task EnsureCanReadRunAsync(Guid eventId, Guid userId)
     {
-        var (isParticipant, eventExists) = await _eventsGrpcClient.IsEventParticipantAsync(eventId, userId);
+        var (eventExists, onTheEvent) = await StandingOnEventAsync(eventId, userId);
         if (!eventExists)
             throw new EntityNotFoundException("Event not found");
 
-        if (!isParticipant && !await _eventsGrpcClient.IsEventAdminAsync(eventId, userId))
+        if (!onTheEvent)
             throw new ForbiddenException("Only event participants, hosts, or the plan creator can view this run");
+    }
+
+    public async Task<bool> CanReadRunAsync(Guid eventId, Guid userId) =>
+        await InstancePlanQuery(eventId).AnyAsync(p => p.CreatedByUserId == userId)
+        || (await StandingOnEventAsync(eventId, userId)).OnTheEvent;
+
+    /// <summary>A participant of any status or a host; a host need not be on the roster.</summary>
+    private async Task<(bool EventExists, bool OnTheEvent)> StandingOnEventAsync(Guid eventId, Guid userId)
+    {
+        var (isParticipant, eventExists) = await _eventsGrpcClient.IsEventParticipantAsync(eventId, userId);
+        return (eventExists, eventExists && (isParticipant || await _eventsGrpcClient.IsEventAdminAsync(eventId, userId)));
     }
 
     public async Task<RunDto> StartAsync(Guid eventId, Guid requestingUserId)

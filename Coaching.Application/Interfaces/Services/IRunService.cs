@@ -7,6 +7,9 @@ public interface IRunService
     /// <summary>Returns the run for the event, or null when no run has started. View = any participant.</summary>
     Task<RunDto?> GetByEventIdAsync(Guid eventId, Guid requestingUserId);
 
+    /// <summary>Whether the user may watch the event's run: its plan's creator, a participant or a host.</summary>
+    Task<bool> CanReadRunAsync(Guid eventId, Guid userId);
+
     /// <summary>Create-or-reset: snapshot all plan items, set Running with the first item current. Plan creator only.</summary>
     Task<RunDto> StartAsync(Guid eventId, Guid requestingUserId);
 

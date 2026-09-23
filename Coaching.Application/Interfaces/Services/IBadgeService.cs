@@ -8,5 +8,5 @@ public interface IBadgeService
     Task<PlayerBadgeDto> AwardBadgeAsync(AwardBadgeDto request, Guid awardedByUserId);
     Task<IEnumerable<PlayerBadgeDto>> GetPlayerBadgesAsync(Guid userId, int page = 1, int pageSize = 20);
     Task<BadgeStatsDto> GetPlayerBadgeStatsAsync(Guid userId);
-    Task<IEnumerable<PlayerBadgeDto>> GetRecentBadgesAsync(Guid? eventId = null, int limit = 10);
+    Task<IEnumerable<PlayerBadgeDto>> GetRecentBadgesAsync(Guid userId, int limit = 10);
 }

@@ -34,13 +34,13 @@ public class EvaluationExercisesController : Shared.Microservices.Controllers.Ba
     }
 
     /// <summary>
-    /// Open to anonymous callers on purpose: an exercise outside any club is the public library's,
-    /// which lists to anyone. Everything else the service refuses as it would a missing exercise.
+    /// An exercise outside any club is the public library's, which lists to any signed-in reader.
+    /// Everything else the service refuses as it would a missing exercise.
     /// </summary>
     [HttpGet("evaluation-exercises/{id:guid}")]
     public async Task<IActionResult> GetById(Guid id)
     {
-        var exercise = await _exerciseService.GetByIdForUserAsync(id, JwtPayload?.UserId);
+        var exercise = await _exerciseService.GetByIdForUserAsync(id, JwtPayload!.UserId);
         return Ok(exercise);
     }
 

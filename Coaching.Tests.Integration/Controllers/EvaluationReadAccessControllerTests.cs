@@ -404,11 +404,12 @@ public class EvaluationReadAccessControllerTests
     // ---- GET /v1/evaluation-exercises/{id} and a club's exercises ----
 
     [Test]
-    public async Task GetExercise_OutsideAnyClub_OpensAnonymously()
+    public async Task GetExercise_OutsideAnyClub_OpensForAnySignedInReader()
     {
-        // Arrange — the public library lists these to anyone, so one of them opens the same way.
+        // Arrange — the public library lists these to anyone signed in, so one of them opens the same way.
         var exercise = new EvaluationExercise { Name = "Serve receive", ClubId = null, CreatedByUserId = _authorId };
         await SeedAsync(exercise);
+        SetAuth(_strangerId);
 
         // Act
         var response = await _client.GetAsync($"/v1/evaluation-exercises/{exercise.Id}");

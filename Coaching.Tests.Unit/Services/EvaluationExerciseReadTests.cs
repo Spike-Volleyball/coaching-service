@@ -49,7 +49,7 @@ public class EvaluationExerciseReadTests : UnitTestBase
     {
         var exercise = new EvaluationExercise { Name = "Serve receive", ClubId = Guid.NewGuid(), CreatedByUserId = Guid.NewGuid() };
         _exercises.GetByIdWithMetricsAsync(exercise.Id).Returns(exercise);
-        _access.MayReadExerciseAsync(exercise, Arg.Any<Guid?>()).Returns(readable);
+        _access.MayReadExerciseAsync(exercise, Arg.Any<Guid>()).Returns(readable);
         return exercise;
     }
 
@@ -80,21 +80,5 @@ public class EvaluationExerciseReadTests : UnitTestBase
         var refusal = (await refused.Should().ThrowAsync<EntityNotFoundException>()).Which;
         var absence = (await missing.Should().ThrowAsync<EntityNotFoundException>()).Which;
         refusal.Message.Should().Be(absence.Message);
-    }
-
-    [Test]
-    public async Task GetByIdForUserAsync_AnonymousAndRefusedOrMissing_AsksThemToSignInEitherWay()
-    {
-        // Arrange — JwtPayloadProvider hands an anonymous caller Guid.Empty, not null.
-        var exercise = Stored(readable: false);
-
-        // Act
-        var refused = () => _sut.GetByIdForUserAsync(exercise.Id, Guid.Empty);
-        var missing = () => _sut.GetByIdForUserAsync(Guid.NewGuid(), null);
-
-        // Assert
-        await refused.Should().ThrowAsync<UnauthorizedException>();
-        await missing.Should().ThrowAsync<UnauthorizedException>();
-        await _access.Received().MayReadExerciseAsync(exercise, null);
     }
 }

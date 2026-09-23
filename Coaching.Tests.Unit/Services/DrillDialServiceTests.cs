@@ -99,7 +99,7 @@ public class DrillDialServiceTests : UnitTestBase
         _dialRepository.When(r => r.Delete(Arg.Any<DrillDial>())).Do(c => _deletedDials.Add(c.Arg<DrillDial>()));
 
         var drillService = Substitute.For<IDrillService>();
-        drillService.GetByIdAsync(Arg.Any<Guid>(), Arg.Any<Guid?>())
+        drillService.GetByIdAsync(Arg.Any<Guid>(), Arg.Any<Guid>())
             .Returns(new DrillDto { Name = "Serve receive" });
 
         _reconciler = new DrillDialReconciler(_dialRepository, _itemRepository, _stationItemRepository, _valueRepository);

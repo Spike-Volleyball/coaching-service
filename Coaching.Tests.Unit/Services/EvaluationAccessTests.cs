@@ -191,35 +191,66 @@ public class EvaluationAccessTests : UnitTestBase
         await act.Should().ThrowAsync<EntityNotFoundException>();
     }
 
+    [TestCase("coach", false, true)]
+    [TestCase("evaluator", false, true)]
+    [TestCase("staff", false, true)]
+    [TestCase("stranger", false, false)]
+    [TestCase("coach", true, false)]
+    public async Task MayReadSessionAsync_AnswersAsEnsureMayReadSessionAsyncDecides(string reader, bool deleted, bool expected)
+    {
+        // Arrange — the evaluation hub asks this before a connection joins the session's room.
+        var session = Session();
+        session.IsDeleted = deleted;
+        var readerId = reader switch
+        {
+            "coach" => _coachId,
+            "evaluator" => _evaluatorId,
+            "staff" => _staffId,
+            _ => _strangerId,
+        };
+
+        // Act
+        var mayRead = await _sut.MayReadSessionAsync(session, readerId);
+
+        // Assert
+        mayRead.Should().Be(expected);
+    }
+
     [Test]
-    public async Task MayReadExerciseAsync_OutsideAnyClub_ReturnsTrueEvenAnonymously()
+    public async Task MayReadSessionAsync_ForAMissingSession_IsFalse()
+    {
+        // Act
+        var mayRead = await _sut.MayReadSessionAsync(null, _coachId);
+
+        // Assert
+        mayRead.Should().BeFalse();
+    }
+
+    [Test]
+    public async Task MayReadExerciseAsync_OutsideAnyClub_ReturnsTrueForAnyReader()
     {
         // Arrange — an exercise with no club is the public library's.
         var exercise = new EvaluationExercise { Name = "Serve receive", ClubId = null, CreatedByUserId = _authorId };
 
         // Act
-        var anonymous = await _sut.MayReadExerciseAsync(exercise, null);
         var stranger = await _sut.MayReadExerciseAsync(exercise, _strangerId);
 
         // Assert
-        anonymous.Should().BeTrue();
         stranger.Should().BeTrue();
     }
 
     [TestCase("author", true)]
     [TestCase("staff", true)]
     [TestCase("stranger", false)]
-    [TestCase("anonymous", false)]
     public async Task MayReadExerciseAsync_OfAClub_ReturnsWhetherTheReaderWroteItOrRunsTheClub(string reader, bool expected)
     {
         // Arrange
         var exercise = new EvaluationExercise { Name = "Serve receive", ClubId = _clubId, CreatedByUserId = _authorId };
-        Guid? readerId = reader switch
+        var readerId = reader switch
         {
             "author" => _authorId,
             "staff" => _staffId,
-            "stranger" => _strangerId,
-            _ => null,
+            _ => _strangerId,
         };
 
         // Act

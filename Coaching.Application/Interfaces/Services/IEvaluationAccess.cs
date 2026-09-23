@@ -37,9 +37,12 @@ public interface IEvaluationAccess
     /// </summary>
     Task<EvaluationSession> EnsureMayReadSessionAsync(EvaluationSession? session, Guid userId);
 
+    /// <summary>The same answer as <see cref="EnsureMayReadSessionAsync"/>, as a yes or no: false for a missing or deleted session.</summary>
+    Task<bool> MayReadSessionAsync(EvaluationSession? session, Guid userId);
+
     /// <summary>
-    /// An exercise outside any club is the public library's, open even to an anonymous reader; a
+    /// An exercise outside any club is the public library's, open to any signed-in reader; a
     /// club's is its author's and its staff's.
     /// </summary>
-    Task<bool> MayReadExerciseAsync(EvaluationExercise exercise, Guid? userId);
+    Task<bool> MayReadExerciseAsync(EvaluationExercise exercise, Guid userId);
 }

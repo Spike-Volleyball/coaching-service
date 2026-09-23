@@ -1,37 +1,30 @@
 using Coaching.Application.DTOs.Evaluation;
 using Coaching.Application.Interfaces.Services;
-using Microsoft.AspNetCore.Authorization;
+using Coaching.Authorization;
 using Microsoft.AspNetCore.SignalR;
+using Shared.Security.Hubs;
 
 namespace Coaching.Hubs;
 
-[Authorize]
-public class EvaluationHub : Hub
+/// <summary>A session's room carries every score submitted in it, so it admits whoever may read the session.</summary>
+public class EvaluationHub(IServiceProvider services, IEvaluationScoringService scoringService) : SecureHub(services)
 {
-    private readonly IEvaluationScoringService _scoringService;
-
-    public EvaluationHub(IEvaluationScoringService scoringService)
-    {
-        _scoringService = scoringService;
-    }
+    public static string SessionGroup(Guid sessionId) => $"session_{sessionId}";
 
     public async Task JoinSession(Guid sessionId)
     {
-        await Groups.AddToGroupAsync(Context.ConnectionId, $"session_{sessionId}");
+        await JoinResourceGroupAsync(SessionGroup(sessionId), sessionId, EvaluationSessionAccess.Read);
         await Clients.Caller.SendAsync("JoinedSession", sessionId);
     }
 
-    public async Task LeaveSession(Guid sessionId)
-    {
-        await Groups.RemoveFromGroupAsync(Context.ConnectionId, $"session_{sessionId}");
-    }
+    public Task LeaveSession(Guid sessionId) => LeaveGroupAsync(SessionGroup(sessionId));
 
     public async Task SubmitScores(Guid sessionId, SubmitExerciseScoresDto dto)
     {
         var userId = GetUserId();
-        var result = await _scoringService.SubmitExerciseScoresAsync(sessionId, dto, userId);
+        var result = await scoringService.SubmitExerciseScoresAsync(sessionId, dto, userId);
 
-        await Clients.Group($"session_{sessionId}")
+        await Clients.Group(SessionGroup(sessionId))
             .SendAsync("ScoresSubmitted", result);
     }
 
