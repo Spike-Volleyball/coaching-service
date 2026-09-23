@@ -33,13 +33,17 @@ public class EvaluationScoringService(
         if (session.Status != EvaluationSessionStatus.Running)
             throw new BadRequestException("Scores can only be submitted for a running session", ErrorCodeEnum.ValidationError);
 
-        // Verify user is the session coach or a group evaluator
-        var isCoach = session.CoachUserId == userId;
-        var groups = await groupRepository.GetBySessionIdAsync(sessionId);
-        var isEvaluator = groups.Any(g => g.EvaluatorUserId == userId);
+        // The session's coach scores anyone. An evaluator scores the players of the groups they
+        // evaluate, which the session load carries, and nobody else's.
+        if (session.CoachUserId != userId)
+        {
+            var evaluated = session.Groups.Where(g => g.EvaluatorUserId == userId).ToList();
+            if (evaluated.Count == 0)
+                throw new ForbiddenException("Only the session coach or a group evaluator can submit scores");
 
-        if (!isCoach && !isEvaluator)
-            throw new ForbiddenException("Only the session coach or a group evaluator can submit scores");
+            if (!evaluated.Any(g => g.Players.Any(p => p.PlayerId == dto.PlayerId)))
+                throw new ForbiddenException("An evaluator scores only the players in their own groups");
+        }
 
         // Verify the player is a participant and get their evaluation
         var participant = session.Participants.FirstOrDefault(p => p.PlayerId == dto.PlayerId);
