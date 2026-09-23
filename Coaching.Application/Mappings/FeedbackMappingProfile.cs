@@ -26,8 +26,11 @@ public class FeedbackMappingProfile : Profile
                     Category = ad.Drill != null ? ad.Drill.Category : null,
                     Intensity = ad.Drill != null ? ad.Drill.Intensity : null,
                 })));
+        // The stored Source is whatever the client sent, and the phone sends none, so a file it
+        // uploaded reads as a Link. The URL answers it, as it does for a feedback's own attachments.
         CreateMap<ImprovementPointMedia, ImprovementPointMediaDto>()
-            .ForMember(d => d.Url, opt => opt.MapFrom<SignedImprovementPointMediaUrlResolver>());
+            .ForMember(d => d.Url, opt => opt.MapFrom<SignedImprovementPointMediaUrlResolver>())
+            .ForMember(d => d.Source, opt => opt.MapFrom<ImprovementPointMediaSourceResolver>());
         CreateMap<FeedbackMedia, FeedbackMediaDto>()
             .ForMember(d => d.Url, opt => opt.MapFrom<SignedFeedbackMediaUrlResolver>())
             .ForMember(d => d.Source, opt => opt.MapFrom<FeedbackMediaSourceResolver>());
@@ -93,6 +96,13 @@ public class SignedImprovementPointMediaUrlResolver(IFeedbackMediaUrlSigner sign
 {
     public string Resolve(ImprovementPointMedia source, ImprovementPointMediaDto destination, string destMember, ResolutionContext context) =>
         signer.SignReadUrl(source.Url);
+}
+
+public class ImprovementPointMediaSourceResolver(IFeedbackMediaUrlSigner signer)
+    : IValueResolver<ImprovementPointMedia, ImprovementPointMediaDto, FeedbackMediaSource>
+{
+    public FeedbackMediaSource Resolve(ImprovementPointMedia source, ImprovementPointMediaDto destination, FeedbackMediaSource destMember, ResolutionContext context) =>
+        signer.IsStored(source.Url) ? FeedbackMediaSource.File : FeedbackMediaSource.Link;
 }
 
 public class StoredFeedbackMediaUrlResolver(IFeedbackMediaUrlSigner signer)

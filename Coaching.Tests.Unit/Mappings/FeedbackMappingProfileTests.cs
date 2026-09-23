@@ -121,6 +121,39 @@ public class FeedbackMappingProfileTests : UnitTestBase
     }
 
     [Test]
+    public void Map_APointsMedia_SaysFileWhenItsUrlIsInOurBucketWhateverTheRowStored()
+    {
+        // Arrange — the phone sends no source, so a file it uploaded is stored as a Link, and the
+        // web editor then treats it as one: it compares the url, which every read signs afresh, and
+        // replaces the "changed" link on each edit. The url answers the question, as it does for a
+        // feedback's own attachments.
+        var feedback = new Feedback
+        {
+            RecipientUserId = Guid.NewGuid(),
+            CoachUserId = Guid.NewGuid(),
+            ImprovementPoints =
+            [
+                new ImprovementPoint
+                {
+                    Description = "Keep the platform still",
+                    MediaLinks =
+                    [
+                        new ImprovementPointMedia { Url = "s3://from-the-phone.jpg", Type = FeedbackMediaType.Image, Source = FeedbackMediaSource.Link },
+                        new ImprovementPointMedia { Url = "https://youtu.be/abc", Type = FeedbackMediaType.Video, Source = FeedbackMediaSource.File },
+                    ],
+                },
+            ],
+        };
+
+        // Act
+        var dto = _sut.Map<FeedbackDto>(feedback);
+
+        // Assert
+        dto.ImprovementPoints.Single().MediaLinks.Select(m => m.Source)
+            .Should().Equal(FeedbackMediaSource.File, FeedbackMediaSource.Link);
+    }
+
+    [Test]
     public void Map_AnAttachmentAClientSent_StoresTheUrlTheSignerWouldKeep()
     {
         // Arrange — reads sign on the way out, so writes undo it on the way in: an editor holds a
