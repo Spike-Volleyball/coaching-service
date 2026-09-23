@@ -26,7 +26,8 @@ public class ThresholdsController : Shared.Microservices.Controllers.BaseApiCont
     [HttpGet("clubs/{clubId:guid}/thresholds")]
     public async Task<IActionResult> GetByClubId(Guid clubId)
     {
-        var thresholds = await _thresholdService.GetByClubIdAsync(clubId);
+        CheckIsUserLoggedIn();
+        var thresholds = await _thresholdService.GetByClubIdAsync(clubId, JwtPayload.UserId);
         return Ok(thresholds);
     }
 

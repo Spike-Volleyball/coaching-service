@@ -26,12 +26,17 @@ public class FeedbackMappingProfile : Profile
                     Category = ad.Drill != null ? ad.Drill.Category : null,
                     Intensity = ad.Drill != null ? ad.Drill.Intensity : null,
                 })));
+        // The stored Source is whatever the client sent, and the phone sends none, so a file it
+        // uploaded reads as a Link. The URL answers it, as it does for a feedback's own attachments.
         CreateMap<ImprovementPointMedia, ImprovementPointMediaDto>()
-            .ForMember(d => d.Url, opt => opt.MapFrom<SignedImprovementPointMediaUrlResolver>());
+            .ForMember(d => d.Url, opt => opt.MapFrom<SignedImprovementPointMediaUrlResolver>())
+            .ForMember(d => d.Source, opt => opt.MapFrom<ImprovementPointMediaSourceResolver>());
         CreateMap<FeedbackMedia, FeedbackMediaDto>()
             .ForMember(d => d.Url, opt => opt.MapFrom<SignedFeedbackMediaUrlResolver>())
             .ForMember(d => d.Source, opt => opt.MapFrom<FeedbackMediaSourceResolver>());
+        // Reads sign a stored file's URL on the way out, so writes undo it on the way in.
         CreateMap<CreateFeedbackMediaDto, FeedbackMedia>()
+            .ForMember(d => d.Url, opt => opt.MapFrom<StoredFeedbackMediaUrlResolver>())
             .ForMember(d => d.Id, opt => opt.Ignore())
             .ForMember(d => d.FeedbackId, opt => opt.Ignore())
             .ForMember(d => d.Order, opt => opt.Ignore())
@@ -60,6 +65,7 @@ public class FeedbackMappingProfile : Profile
             .ForMember(d => d.MediaLinks, opt => opt.Ignore());
 
         CreateMap<CreateImprovementPointMediaDto, ImprovementPointMedia>()
+            .ForMember(d => d.Url, opt => opt.MapFrom<StoredImprovementPointMediaUrlResolver>())
             .ForMember(d => d.Id, opt => opt.Ignore())
             .ForMember(d => d.ImprovementPointId, opt => opt.Ignore())
             .ForMember(d => d.ImprovementPoint, opt => opt.Ignore());
@@ -90,4 +96,25 @@ public class SignedImprovementPointMediaUrlResolver(IFeedbackMediaUrlSigner sign
 {
     public string Resolve(ImprovementPointMedia source, ImprovementPointMediaDto destination, string destMember, ResolutionContext context) =>
         signer.SignReadUrl(source.Url);
+}
+
+public class ImprovementPointMediaSourceResolver(IFeedbackMediaUrlSigner signer)
+    : IValueResolver<ImprovementPointMedia, ImprovementPointMediaDto, FeedbackMediaSource>
+{
+    public FeedbackMediaSource Resolve(ImprovementPointMedia source, ImprovementPointMediaDto destination, FeedbackMediaSource destMember, ResolutionContext context) =>
+        signer.IsStored(source.Url) ? FeedbackMediaSource.File : FeedbackMediaSource.Link;
+}
+
+public class StoredFeedbackMediaUrlResolver(IFeedbackMediaUrlSigner signer)
+    : IValueResolver<CreateFeedbackMediaDto, FeedbackMedia, string>
+{
+    public string Resolve(CreateFeedbackMediaDto source, FeedbackMedia destination, string destMember, ResolutionContext context) =>
+        signer.ToStoredUrl(source.Url);
+}
+
+public class StoredImprovementPointMediaUrlResolver(IFeedbackMediaUrlSigner signer)
+    : IValueResolver<CreateImprovementPointMediaDto, ImprovementPointMedia, string>
+{
+    public string Resolve(CreateImprovementPointMediaDto source, ImprovementPointMedia destination, string destMember, ResolutionContext context) =>
+        signer.ToStoredUrl(source.Url);
 }

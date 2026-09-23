@@ -21,6 +21,7 @@ public class EvaluationScoringService(
     IRepository<PlayerMetricScore> metricScoreRepository,
     IScoreCalculationService scoreCalculationService,
     IAnalyticsCapture analytics,
+    IEvaluationAccess access,
     IMapper mapper) : IEvaluationScoringService
 {
     public async Task<PlayerExerciseScoreDto> SubmitExerciseScoresAsync(Guid sessionId, SubmitExerciseScoresDto dto, Guid userId)
@@ -32,13 +33,17 @@ public class EvaluationScoringService(
         if (session.Status != EvaluationSessionStatus.Running)
             throw new BadRequestException("Scores can only be submitted for a running session", ErrorCodeEnum.ValidationError);
 
-        // Verify user is the session coach or a group evaluator
-        var isCoach = session.CoachUserId == userId;
-        var groups = await groupRepository.GetBySessionIdAsync(sessionId);
-        var isEvaluator = groups.Any(g => g.EvaluatorUserId == userId);
+        // The session's coach scores anyone. An evaluator scores the players of the groups they
+        // evaluate, which the session load carries, and nobody else's.
+        if (session.CoachUserId != userId)
+        {
+            var evaluated = session.Groups.Where(g => g.EvaluatorUserId == userId).ToList();
+            if (evaluated.Count == 0)
+                throw new ForbiddenException("Only the session coach or a group evaluator can submit scores");
 
-        if (!isCoach && !isEvaluator)
-            throw new ForbiddenException("Only the session coach or a group evaluator can submit scores");
+            if (!evaluated.Any(g => g.Players.Any(p => p.PlayerId == dto.PlayerId)))
+                throw new ForbiddenException("An evaluator scores only the players in their own groups");
+        }
 
         // Verify the player is a participant and get their evaluation
         var participant = session.Participants.FirstOrDefault(p => p.PlayerId == dto.PlayerId);
@@ -131,22 +136,18 @@ public class EvaluationScoringService(
         return mapper.Map<PlayerExerciseScoreDto>(updatedScore);
     }
 
-    public async Task<IEnumerable<PlayerExerciseScoreDto>> GetSessionScoresAsync(Guid sessionId)
+    public async Task<IEnumerable<PlayerExerciseScoreDto>> GetSessionScoresAsync(Guid sessionId, Guid userId)
     {
-        var session = await sessionRepository.GetByIdAsync(sessionId);
-        if (session == null)
-            throw new EntityNotFoundException("Evaluation session not found");
+        await access.EnsureMayReadSessionAsync(await sessionRepository.GetByIdAsync(sessionId), userId);
 
         var scores = await exerciseScoreRepository.GetBySessionIdAsync(sessionId);
         return mapper.Map<IEnumerable<PlayerExerciseScoreDto>>(scores);
     }
 
     public async Task<IEnumerable<PlayerExerciseScoreDto>> GetGroupExerciseScoresAsync(
-        Guid sessionId, Guid groupId, Guid exerciseId)
+        Guid sessionId, Guid groupId, Guid exerciseId, Guid userId)
     {
-        var session = await sessionRepository.GetByIdAsync(sessionId);
-        if (session == null)
-            throw new EntityNotFoundException("Evaluation session not found");
+        await access.EnsureMayReadSessionAsync(await sessionRepository.GetByIdAsync(sessionId), userId);
 
         var group = await groupRepository.GetByIdWithPlayersAsync(groupId);
         if (group == null || group.SessionId != sessionId)

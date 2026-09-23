@@ -2,6 +2,7 @@ using AutoMapper;
 using Coaching.Application.DTOs.Feedback;
 using Coaching.Application.Interfaces.Repositories;
 using Coaching.Application.Interfaces.Services;
+using Coaching.Application.Validation;
 using Coaching.Domain.Models.Feedback;
 using Ganss.Xss;
 using MassTransit;
@@ -115,6 +116,11 @@ public class FeedbackService(
         if (resolvedClubId.HasValue)
             request = request with { ClubId = resolvedClubId.Value };
 
+        // Before the first save: a create saves in stages, so a late refusal would leave half a feedback.
+        LinkUrl.EnsureHttp(AttachmentLinksOf(request.Attachments)
+            .Concat((request.ImprovementPoints ?? []).SelectMany((point, i) =>
+                PointLinksOf(point.MediaLinks, $"improvementPoints[{i}]."))));
+
         var feedback = mapper.Map<Feedback>(request);
         feedback.CoachUserId = coachUserId;
 
@@ -205,6 +211,11 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can update this feedback");
 
+        // A kept attachment's url is never read (StageAttachmentsAsync keeps the stored one), so
+        // only the attachments this edit adds are judged.
+        LinkUrl.EnsureHttp(AttachmentLinksOf(request.Attachments)
+            .Where((_, i) => request.Attachments![i].Id is null));
+
         // Handle content update from either Content or Comment field (Phase A compat)
         var newContent = request.Content ?? request.Comment;
         if (newContent != null)
@@ -266,6 +277,7 @@ public class FeedbackService(
             removed.IsDeleted = true;
 
         // A kept row keeps its stored Url whatever the entry says: reads hand out presigned URLs.
+        // A new row maps like a created one, so a presigned URL is stored bare there too.
         // New rows go through Add, not through the tracked parent's collection — BaseEntity sets
         // every Id at construction, and a keyed child found only by navigation saves as an UPDATE.
         for (var order = 0; order < attachments.Count; order++)
@@ -280,14 +292,10 @@ public class FeedbackService(
                 continue;
             }
 
-            feedbackMediaRepository.Add(new FeedbackMedia
-            {
-                FeedbackId = feedbackId,
-                Url = entry.Url,
-                Type = entry.Type,
-                Title = entry.Title,
-                Order = order,
-            });
+            var added = mapper.Map<CreateFeedbackMediaDto, FeedbackMedia>(entry);
+            added.FeedbackId = feedbackId;
+            added.Order = order;
+            feedbackMediaRepository.Add(added);
         }
     }
 
@@ -409,6 +417,8 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
+        LinkUrl.EnsureHttp(PointLinksOf(request.MediaLinks));
+
         var maxOrder = feedback.ImprovementPoints.Any() ? feedback.ImprovementPoints.Max(p => p.Order) : 0;
         var order = request.Order ?? maxOrder + 1;
 
@@ -431,9 +441,7 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
-        var point = await pointRepository.GetByIdAsync(pointId);
-        if (point == null || point.FeedbackId != feedbackId)
-            throw new EntityNotFoundException("Improvement point not found");
+        var point = await PointOnFeedbackAsync(feedbackId, pointId);
 
         if (request.Description != null) point.Description = request.Description;
 
@@ -452,9 +460,7 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
-        var point = await pointRepository.GetByIdAsync(pointId);
-        if (point == null || point.FeedbackId != feedbackId)
-            throw new EntityNotFoundException("Improvement point not found");
+        var point = await PointOnFeedbackAsync(feedbackId, pointId);
 
         point.IsDeleted = true;
         pointRepository.Update(point);
@@ -471,6 +477,8 @@ public class FeedbackService(
 
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
+
+        await PointOnFeedbackAsync(feedbackId, pointId);
 
         // Validate drill exists locally (both in coaching-service now)
         var drill = await drillRepository.GetByIdAsync(drillId);
@@ -511,6 +519,8 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
+        await PointOnFeedbackAsync(feedbackId, pointId);
+
         var link = await drillLinkRepository.Query()
             .FirstOrDefaultAsync(l => l.ImprovementPointId == pointId && l.DrillId == drillId);
 
@@ -533,6 +543,9 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
+        await PointOnFeedbackAsync(feedbackId, pointId);
+        LinkUrl.EnsureHttp([("url", request.Url)]);
+
         var media = mapper.Map<ImprovementPointMedia>(request);
         media.ImprovementPointId = pointId;
 
@@ -550,6 +563,8 @@ public class FeedbackService(
 
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
+
+        await PointOnFeedbackAsync(feedbackId, pointId);
 
         var media = await mediaRepository.GetByIdAsync(mediaId);
         if (media == null || media.ImprovementPointId != pointId)
@@ -657,6 +672,27 @@ public class FeedbackService(
             await mediaRepository.SaveChangesAsync();
         }
     }
+
+    /// <summary>
+    /// The point a request names, which must be a live one on the feedback it names: the caller was
+    /// authorized against that feedback, so a point from another would be changed on its authority.
+    /// </summary>
+    private async Task<ImprovementPoint> PointOnFeedbackAsync(Guid feedbackId, Guid pointId)
+    {
+        var point = await pointRepository.GetByIdAsync(pointId);
+        if (point == null || point.IsDeleted || point.FeedbackId != feedbackId)
+            throw new EntityNotFoundException("Improvement point not found");
+        return point;
+    }
+
+    /// <summary>A feedback's own attachments, each named as the request carries it.</summary>
+    private static IEnumerable<(string Field, string? Url)> AttachmentLinksOf(IEnumerable<CreateFeedbackMediaDto>? attachments) =>
+        (attachments ?? []).Select((media, i) => ($"attachments[{i}].url", (string?)media.Url));
+
+    /// <summary>One point's media, named under the point when the request nests it in one.</summary>
+    private static IEnumerable<(string Field, string? Url)> PointLinksOf(
+        IEnumerable<CreateImprovementPointMediaDto>? mediaLinks, string prefix = "") =>
+        (mediaLinks ?? []).Select((media, i) => ($"{prefix}mediaLinks[{i}].url", (string?)media.Url));
 
     private async Task EnrichWithProfilesAsync(IEnumerable<FeedbackDto> feedbacks)
     {

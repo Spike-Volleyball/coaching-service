@@ -249,6 +249,25 @@ public class DrillImportServiceTests
     }
 
     [Test]
+    public async Task ImportAsync_WithAVideoLinkThatIsNotHttp_ReportsTheRowAndImportsTheRest()
+    {
+        // Arrange
+        var request = ImportRequest(
+        [
+            Row(1, "Linked") with { VideoUrl = "https://youtu.be/serve" },
+            Row(2, "Hostile") with { VideoUrl = "javascript:alert(1)" },
+            Row(3, "Unlinked"),
+        ]);
+
+        // Act
+        var result = await _sut.ImportAsync(request, ImporterId);
+
+        // Assert
+        result.Results.Single(r => r.RowNumber == 2).Error.Should().Be("Video link must start with http:// or https://");
+        _persisted.Select(d => d.Name).Should().Equal("Linked", "Unlinked");
+    }
+
+    [Test]
     public async Task ImportAsync_WithEquipmentNameLongerThanTheColumn_ReportsTheRow()
     {
         // Arrange

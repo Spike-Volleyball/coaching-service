@@ -33,18 +33,22 @@ public class EvaluationExercisesController : Shared.Microservices.Controllers.Ba
         return Ok(result);
     }
 
+    /// <summary>
+    /// Open to anonymous callers on purpose: an exercise outside any club is the public library's,
+    /// which lists to anyone. Everything else the service refuses as it would a missing exercise.
+    /// </summary>
     [HttpGet("evaluation-exercises/{id:guid}")]
     public async Task<IActionResult> GetById(Guid id)
     {
-        var exercise = await _exerciseService.GetByIdAsync(id);
-        if (exercise == null) return NotFound();
+        var exercise = await _exerciseService.GetByIdForUserAsync(id, JwtPayload?.UserId);
         return Ok(exercise);
     }
 
     [HttpGet("clubs/{clubId:guid}/evaluation-exercises")]
     public async Task<IActionResult> GetByClubId(Guid clubId)
     {
-        var exercises = await _exerciseService.GetByClubIdAsync(clubId);
+        CheckIsUserLoggedIn();
+        var exercises = await _exerciseService.GetByClubIdAsync(clubId, JwtPayload.UserId);
         return Ok(exercises);
     }
 
