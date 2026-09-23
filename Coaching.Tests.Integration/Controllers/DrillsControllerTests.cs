@@ -5,6 +5,7 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Coaching.Application.DTOs.Drills;
 using Coaching.Domain.Enums;
 using Coaching.Domain.Models.Drills;
@@ -125,6 +126,25 @@ public class DrillsControllerTests
         persisted.Variations.Select(v => (v.TargetDrillId, v.Note, v.Order)).Should().Equal(
             (targetOne.Id, "Simpler version", 0),
             (targetTwo.Id, "Harder version", 1));
+    }
+
+    [Test]
+    public async Task Create_WithSkillNumberEight_ReadsBackAsEyeworkReading()
+    {
+        // Arrange - the web sends skills by number, so 8 is the contract for Eyework/Reading
+        await SeedAsync([CreatorProfile()]);
+        SetAuth(CreatorId);
+        var body = JsonSerializer.SerializeToNode(CompleteCreateRequest(), JsonOptions)!.AsObject();
+        body["skills"] = new JsonArray(8);
+
+        // Act
+        var created = await _client.PostAsJsonAsync("/v1/drills", body);
+        var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetGuid();
+        var read = await _client.GetFromJsonAsync<JsonElement>($"/v1/drills/{id}");
+
+        // Assert
+        created.StatusCode.Should().Be(HttpStatusCode.Created);
+        read.GetProperty("skills").EnumerateArray().Select(s => s.ToString()).Should().Equal("Reading");
     }
 
     [Test]

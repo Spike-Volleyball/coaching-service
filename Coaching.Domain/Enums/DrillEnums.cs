@@ -26,7 +26,9 @@ public enum DrillSkill
     Blocking = 4,
     Defense = 5,
     Conditioning = 6,
-    Footwork = 7
+    Footwork = 7,
+    // Shown to coaches as "Eyework/Reading".
+    Reading = 8
 }
 
 public enum DrillVisibility
