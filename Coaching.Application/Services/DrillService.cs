@@ -5,6 +5,7 @@ using Coaching.Application.DTOs.Drills;
 using Coaching.Application.Interfaces.Repositories;
 using Coaching.Application.Interfaces.Services;
 using Coaching.Application.RichText;
+using Coaching.Application.Validation;
 using Coaching.Domain.Enums;
 using Coaching.Domain.Models.Drills;
 using Microsoft.EntityFrameworkCore;
@@ -154,6 +155,8 @@ public class DrillService : IDrillService
     {
         if (string.IsNullOrWhiteSpace(request.Name))
             throw new BadRequestException("Name is required", ErrorCodeEnum.ValidationError);
+
+        EnsureVideoUrlIsHttp(request.VideoUrl);
 
         if (request.ClubId.HasValue)
             await EnsureCanManageClubDrillsAsync(request.ClubId.Value, userId);
@@ -324,6 +327,9 @@ public class DrillService : IDrillService
         if (row.VideoUrl?.Length > Drill.VideoUrlMaxLength)
             return $"Video link is longer than {Drill.VideoUrlMaxLength} characters";
 
+        if (!string.IsNullOrWhiteSpace(row.VideoUrl) && !LinkUrl.IsHttp(row.VideoUrl))
+            return "Video link must start with http:// or https://";
+
         if (row.Equipment?.Any(item => item.Name?.Length > DrillEquipment.NameMaxLength) == true)
             return $"Equipment name is longer than {DrillEquipment.NameMaxLength} characters";
 
@@ -391,6 +397,8 @@ public class DrillService : IDrillService
 
         if (string.IsNullOrWhiteSpace(request.Name))
             throw new BadRequestException("Name is required", ErrorCodeEnum.ValidationError);
+
+        EnsureVideoUrlIsHttp(request.VideoUrl);
 
         // Updating a club drill affects the current club even when the request moves it out.
         // A move to another club affects both clubs, so authorization is required in each.
@@ -551,6 +559,13 @@ public class DrillService : IDrillService
 
     private Task EnsureCanManageClubDrillsAsync(Guid clubId, Guid userId) =>
         DrillEditRules.EnsureCanManageClubDrillsAsync(clubId, userId, _clubsClient);
+
+    /// <summary>A drill needs no video, so a missing or blank one is not judged.</summary>
+    private static void EnsureVideoUrlIsHttp(string? videoUrl)
+    {
+        if (!string.IsNullOrWhiteSpace(videoUrl))
+            LinkUrl.EnsureHttp([("videoUrl", videoUrl)]);
+    }
 
     // =========================================================================
     // LIKES
@@ -811,6 +826,9 @@ public class DrillService : IDrillService
 
         if (!CanModifyDrill(drill, userId))
             throw new ForbiddenException("Only the creator can add attachments");
+
+        // An uploaded file's url and a pasted link both arrive here.
+        LinkUrl.EnsureHttp([("fileUrl", request.FileUrl)]);
 
         var maxOrder = await _attachmentRepository.GetMaxOrderForDrillAsync(drillId);
 

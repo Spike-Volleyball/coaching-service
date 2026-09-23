@@ -23,6 +23,7 @@ namespace Coaching.Tests.Unit.Services;
 public class DrillCrudServiceTests
 {
     private IDrillRepository _drillRepository = null!;
+    private IDrillAttachmentRepository _attachmentRepository = null!;
     private IClubsGrpcClient _clubsClient = null!;
     private IMapper _mapper = null!;
     private DrillService _sut = null!;
@@ -33,6 +34,7 @@ public class DrillCrudServiceTests
     public void SetUp()
     {
         _drillRepository = Substitute.For<IDrillRepository>();
+        _attachmentRepository = Substitute.For<IDrillAttachmentRepository>();
         _clubsClient = Substitute.For<IClubsGrpcClient>();
         _mapper = Substitute.For<IMapper>();
         _mapper.Map<DrillDto>(Arg.Any<Drill>()).Returns(call => ToDto(call.Arg<Drill>()));
@@ -42,7 +44,7 @@ public class DrillCrudServiceTests
             Substitute.For<IDrillLikeRepository>(),
             Substitute.For<IDrillBookmarkRepository>(),
             Substitute.For<IDrillCommentRepository>(),
-            Substitute.For<IDrillAttachmentRepository>(),
+            _attachmentRepository,
             _clubsClient,
             Substitute.For<IFileService>(),
             Options.Create(new S3Settings { Bucket = "test-bucket", PublicBaseUrl = "https://cdn.test" }),
@@ -189,6 +191,41 @@ public class DrillCrudServiceTests
         exception.Which.Message.Should().Contain(missingDrillId.ToString());
         _drillRepository.DidNotReceive().Add(Arg.Any<Drill>());
         await _drillRepository.DidNotReceive().SaveChangesAsync();
+    }
+
+    [Test]
+    public async Task CreateAsync_WithAJavascriptVideoUrl_RejectsNamingItWithoutWriting()
+    {
+        // Arrange
+        var request = CompleteCreateRequest() with { VideoUrl = "javascript:alert(document.cookie)" };
+
+        // Act
+        var act = () => _sut.CreateAsync(request, CreatorId);
+
+        // Assert
+        var exception = await act.Should().ThrowAsync<ValidationException>();
+        exception.Which.FieldErrors.Select(e => e.Field).Should().Equal("videoUrl");
+        _drillRepository.DidNotReceive().Add(Arg.Any<Drill>());
+        await _drillRepository.DidNotReceive().SaveChangesAsync();
+    }
+
+    [TestCase(null)]
+    [TestCase("")]
+    [TestCase("   ")]
+    public async Task CreateAsync_WithoutAVideoUrl_StillCreates(string? videoUrl)
+    {
+        // Arrange
+        Drill? persisted = null;
+        _drillRepository.When(x => x.Add(Arg.Any<Drill>())).Do(call => persisted = call.Arg<Drill>());
+        _drillRepository.GetByIdWithDetailsAsync(Arg.Any<Guid>()).Returns(_ => persisted);
+        var request = CompleteCreateRequest() with { VideoUrl = videoUrl };
+
+        // Act
+        await _sut.CreateAsync(request, CreatorId);
+
+        // Assert
+        persisted.Should().NotBeNull();
+        await _drillRepository.Received(1).SaveChangesAsync();
     }
 
     [Test]
@@ -394,6 +431,59 @@ public class DrillCrudServiceTests
         drill.Name.Should().Be("Original");
         _drillRepository.DidNotReceive().Update(Arg.Any<Drill>());
         await _drillRepository.DidNotReceive().SaveChangesAsync();
+    }
+
+    [Test]
+    public async Task UpdateAsync_WithADataVideoUrl_RejectsNamingItWithoutChangingDrill()
+    {
+        // Arrange
+        var drill = NewDrill("Existing", CreatorId);
+        drill.VideoUrl = "https://video.test/original";
+        _drillRepository.GetByIdWithDetailsAsync(drill.Id).Returns(drill);
+        var request = CompleteUpdateRequest(drill.Id) with { VideoUrl = "data:text/html,<script>alert(1)</script>" };
+
+        // Act
+        var act = () => _sut.UpdateAsync(request, CreatorId);
+
+        // Assert
+        var exception = await act.Should().ThrowAsync<ValidationException>();
+        exception.Which.FieldErrors.Select(e => e.Field).Should().Equal("videoUrl");
+        drill.VideoUrl.Should().Be("https://video.test/original");
+        await _drillRepository.DidNotReceive().SaveChangesAsync();
+    }
+
+    [Test]
+    public async Task AddAttachmentAsync_WithAJavascriptFileUrl_RejectsNamingItWithoutWriting()
+    {
+        // Arrange
+        var drill = NewDrill("Existing", CreatorId);
+        _drillRepository.GetByIdAsync(drill.Id).Returns(drill);
+        var request = new CreateDrillAttachmentDto("Tap me", "javascript:alert(1)", DrillAttachmentType.Document, 0);
+
+        // Act
+        var act = () => _sut.AddAttachmentAsync(drill.Id, request, CreatorId);
+
+        // Assert
+        var exception = await act.Should().ThrowAsync<ValidationException>();
+        exception.Which.FieldErrors.Select(e => e.Field).Should().Equal("fileUrl");
+        _attachmentRepository.DidNotReceive().Add(Arg.Any<DrillAttachment>());
+        await _attachmentRepository.DidNotReceive().SaveChangesAsync();
+    }
+
+    [Test]
+    public async Task AddAttachmentAsync_WithAnHttpsLink_AddsIt()
+    {
+        // Arrange
+        var drill = NewDrill("Existing", CreatorId);
+        _drillRepository.GetByIdAsync(drill.Id).Returns(drill);
+        var request = new CreateDrillAttachmentDto("Reference", "https://youtu.be/serve", DrillAttachmentType.Video, 0);
+
+        // Act
+        await _sut.AddAttachmentAsync(drill.Id, request, CreatorId);
+
+        // Assert
+        _attachmentRepository.Received(1).Add(Arg.Is<DrillAttachment>(a => a.FileUrl == "https://youtu.be/serve"));
+        await _attachmentRepository.Received(1).SaveChangesAsync();
     }
 
     [Test]

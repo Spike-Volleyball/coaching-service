@@ -158,6 +158,23 @@ public class DrillsControllerTests
     }
 
     [Test]
+    public async Task Create_WithAJavascriptVideoUrl_ReturnsBadRequestNamingItAndDoesNotPersist()
+    {
+        // Arrange
+        await SeedAsync([CreatorProfile()]);
+        SetAuth(CreatorId);
+        var request = CompleteCreateRequest() with { VideoUrl = "javascript:alert(document.cookie)" };
+
+        // Act
+        var response = await _client.PostAsJsonAsync("/v1/drills", request, JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await FieldsNamedBy(response)).Should().Equal("videoUrl");
+        (await CountDrillsAsync()).Should().Be(0);
+    }
+
+    [Test]
     public async Task Create_ForClub_RequiresCoachRoleAndPersistsWhenAuthorized()
     {
         // Arrange
@@ -695,6 +712,27 @@ public class DrillsControllerTests
     }
 
     [Test]
+    public async Task AddAttachment_WithAJavascriptFileUrl_ReturnsBadRequestNamingItAndAddsNothing()
+    {
+        // Arrange
+        var source = NewDrill("Linked drill", CreatorId);
+        await SeedAsync([CreatorProfile(), source]);
+        SetAuth(CreatorId);
+        var request = new CreateDrillAttachmentDto("Tap me", "javascript:alert(1)", DrillAttachmentType.Document, 0);
+
+        // Act
+        var response = await _client.PostAsJsonAsync(
+            $"/v1/drills/{source.Id}/attachments", request, JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await FieldsNamedBy(response)).Should().Equal("fileUrl");
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<CoachingDbContext>();
+        (await db.DrillAttachments.CountAsync()).Should().Be(0);
+    }
+
+    [Test]
     public async Task UpdateAnimations_AsCreator_ReplacesStoredAnimationDocument()
     {
         // Arrange
@@ -762,6 +800,15 @@ public class DrillsControllerTests
     {
         await using var scope = _factory.Services.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<CoachingDbContext>().Drills.CountAsync();
+    }
+
+    /// <summary>The fields a validation refusal names, read off the shared problem-details body.</summary>
+    private static async Task<List<string>> FieldsNamedBy(HttpResponseMessage response)
+    {
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        return body.RootElement.GetProperty("errors").EnumerateArray()
+            .Select(e => e.GetProperty("field").GetString()!)
+            .ToList();
     }
 
     private async Task<Drill?> FindDrillAsync(Guid id)

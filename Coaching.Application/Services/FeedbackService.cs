@@ -2,6 +2,7 @@ using AutoMapper;
 using Coaching.Application.DTOs.Feedback;
 using Coaching.Application.Interfaces.Repositories;
 using Coaching.Application.Interfaces.Services;
+using Coaching.Application.Validation;
 using Coaching.Domain.Models.Feedback;
 using Ganss.Xss;
 using MassTransit;
@@ -115,6 +116,11 @@ public class FeedbackService(
         if (resolvedClubId.HasValue)
             request = request with { ClubId = resolvedClubId.Value };
 
+        // Before the first save: a create saves in stages, so a late refusal would leave half a feedback.
+        LinkUrl.EnsureHttp(AttachmentLinksOf(request.Attachments)
+            .Concat((request.ImprovementPoints ?? []).SelectMany((point, i) =>
+                PointLinksOf(point.MediaLinks, $"improvementPoints[{i}]."))));
+
         var feedback = mapper.Map<Feedback>(request);
         feedback.CoachUserId = coachUserId;
 
@@ -204,6 +210,11 @@ public class FeedbackService(
 
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can update this feedback");
+
+        // A kept attachment's url is never read (StageAttachmentsAsync keeps the stored one), so
+        // only the attachments this edit adds are judged.
+        LinkUrl.EnsureHttp(AttachmentLinksOf(request.Attachments)
+            .Where((_, i) => request.Attachments![i].Id is null));
 
         // Handle content update from either Content or Comment field (Phase A compat)
         var newContent = request.Content ?? request.Comment;
@@ -409,6 +420,8 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
+        LinkUrl.EnsureHttp(PointLinksOf(request.MediaLinks));
+
         var maxOrder = feedback.ImprovementPoints.Any() ? feedback.ImprovementPoints.Max(p => p.Order) : 0;
         var order = request.Order ?? maxOrder + 1;
 
@@ -532,6 +545,8 @@ public class FeedbackService(
 
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
+
+        LinkUrl.EnsureHttp([("url", request.Url)]);
 
         var media = mapper.Map<ImprovementPointMedia>(request);
         media.ImprovementPointId = pointId;
@@ -657,6 +672,15 @@ public class FeedbackService(
             await mediaRepository.SaveChangesAsync();
         }
     }
+
+    /// <summary>A feedback's own attachments, each named as the request carries it.</summary>
+    private static IEnumerable<(string Field, string? Url)> AttachmentLinksOf(IEnumerable<CreateFeedbackMediaDto>? attachments) =>
+        (attachments ?? []).Select((media, i) => ($"attachments[{i}].url", (string?)media.Url));
+
+    /// <summary>One point's media, named under the point when the request nests it in one.</summary>
+    private static IEnumerable<(string Field, string? Url)> PointLinksOf(
+        IEnumerable<CreateImprovementPointMediaDto>? mediaLinks, string prefix = "") =>
+        (mediaLinks ?? []).Select((media, i) => ($"{prefix}mediaLinks[{i}].url", (string?)media.Url));
 
     private async Task EnrichWithProfilesAsync(IEnumerable<FeedbackDto> feedbacks)
     {
