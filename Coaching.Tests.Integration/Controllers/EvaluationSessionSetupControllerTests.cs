@@ -171,6 +171,71 @@ public class EvaluationSessionSetupControllerTests
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
+    private async Task<EvaluationGroup> StoredGroupAsync(Guid groupId)
+    {
+        using var scope = _factory.Services.CreateScope();
+        return await scope.ServiceProvider.GetRequiredService<CoachingDbContext>()
+            .Set<EvaluationGroup>().AsNoTracking().SingleAsync(g => g.Id == groupId);
+    }
+
+    [Test]
+    public async Task UpdateGroup_AssigningSomeoneWhoMayNotEvaluateInTheClub_Returns400NamingItAndKeepsTheGroup()
+    {
+        // Arrange — any user id was taken, including someone with no standing in the club at all.
+        var session = Session();
+        var group = new EvaluationGroup { SessionId = session.Id, Name = "Court one", Order = 0 };
+        await SeedAsync(session, group);
+        SetAuth(_coachId);
+
+        // Act
+        var response = await _client.PutAsJsonAsync(
+            $"/v1/evaluation-sessions/{session.Id}/groups/{group.Id}", new { evaluatorUserId = Guid.NewGuid() });
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        body.RootElement.GetProperty("errors")[0].GetProperty("field").GetString().Should().Be("evaluatorUserId");
+        (await StoredGroupAsync(group.Id)).EvaluatorUserId.Should().BeNull();
+    }
+
+    [Test]
+    public async Task UpdateGroup_AssigningAClubCoach_StoresThem()
+    {
+        // Arrange
+        var evaluator = Guid.NewGuid();
+        _factory.ClubsGrpcClient.CanGiveFeedbackInClubAsync(evaluator, _clubId).Returns(true);
+        var session = Session();
+        var group = new EvaluationGroup { SessionId = session.Id, Name = "Court one", Order = 0 };
+        await SeedAsync(session, group);
+        SetAuth(_coachId);
+
+        // Act
+        var response = await _client.PutAsJsonAsync(
+            $"/v1/evaluation-sessions/{session.Id}/groups/{group.Id}", new { evaluatorUserId = evaluator });
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        (await StoredGroupAsync(group.Id)).EvaluatorUserId.Should().Be(evaluator);
+    }
+
+    [Test]
+    public async Task UpdateGroup_ClearingTheEvaluatorOfADraft_ClearsIt()
+    {
+        // Arrange
+        var session = Session();
+        var group = new EvaluationGroup { SessionId = session.Id, Name = "Court one", Order = 0, EvaluatorUserId = Guid.NewGuid() };
+        await SeedAsync(session, group);
+        SetAuth(_coachId);
+
+        // Act
+        var response = await _client.PutAsJsonAsync(
+            $"/v1/evaluation-sessions/{session.Id}/groups/{group.Id}", new { clearEvaluator = true });
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        (await StoredGroupAsync(group.Id)).EvaluatorUserId.Should().BeNull();
+    }
+
     [Test]
     public async Task SubmitScores_ByAnEvaluatorForAPlayerOutsideTheirGroup_Returns403AndScoresNothing()
     {

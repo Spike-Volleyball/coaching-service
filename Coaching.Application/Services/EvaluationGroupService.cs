@@ -15,6 +15,7 @@ public class EvaluationGroupService(
     IEvaluationGroupRepository groupRepository,
     IEvaluationParticipantRepository participantRepository,
     IRepository<EvaluationGroupPlayer> groupPlayerRepository,
+    IEvaluationAccess access,
     IMapper mapper) : IEvaluationGroupService
 {
     public async Task<EvaluationGroupDto> CreateGroupAsync(Guid sessionId, CreateGroupDto dto, Guid userId)
@@ -24,6 +25,9 @@ public class EvaluationGroupService(
 
         if (string.IsNullOrWhiteSpace(dto.Name))
             throw new BadRequestException("Group name is required", ErrorCodeEnum.ValidationError);
+
+        if (dto.EvaluatorUserId is { } evaluatorId)
+            await EnsureMayEvaluateAsync(session, evaluatorId);
 
         // Determine next order number
         var existingGroups = await groupRepository.GetBySessionIdAsync(sessionId);
@@ -62,8 +66,27 @@ public class EvaluationGroupService(
         if (group == null || group.SessionId != sessionId)
             throw new EntityNotFoundException("Group not found");
 
+        if (dto.ClearEvaluator)
+        {
+            if (dto.EvaluatorUserId.HasValue)
+                throw new ValidationException("evaluatorUserId", "CLEAR_OR_ASSIGN",
+                    "Assign an evaluator or clear the group's evaluator, not both");
+
+            // A session starts only once every group has an evaluator, and a group of a running
+            // session left without one could be scored by nobody but the coach.
+            if (session.Status != EvaluationSessionStatus.Draft)
+                throw new ValidationException("clearEvaluator", "SESSION_STARTED",
+                    "A group's evaluator can only be removed before the session starts");
+
+            group.EvaluatorUserId = null;
+        }
+        else if (dto.EvaluatorUserId is { } evaluatorId && evaluatorId != group.EvaluatorUserId)
+        {
+            await EnsureMayEvaluateAsync(session, evaluatorId);
+            group.EvaluatorUserId = evaluatorId;
+        }
+
         if (dto.Name != null) group.Name = dto.Name;
-        if (dto.EvaluatorUserId.HasValue) group.EvaluatorUserId = dto.EvaluatorUserId;
 
         groupRepository.Update(group);
         await groupRepository.SaveChangesAsync();
@@ -252,6 +275,17 @@ public class EvaluationGroupService(
             throw new ForbiddenException("Only the session coach can manage groups");
 
         return session;
+    }
+
+    /// <summary>
+    /// An evaluator appraises the players of their group, so they need the standing giving
+    /// feedback in the session's club asks for; any user id used to be taken as one.
+    /// </summary>
+    private async Task EnsureMayEvaluateAsync(EvaluationSession session, Guid evaluatorId)
+    {
+        if (!await access.MayEvaluateInClubAsync(session.ClubId, evaluatorId))
+            throw new ValidationException("evaluatorUserId", "NOT_ELIGIBLE",
+                "This person cannot evaluate players in this club");
     }
 
     private static void ValidateSessionModifiable(EvaluationSession session)
