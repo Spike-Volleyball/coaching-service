@@ -35,9 +35,11 @@ public interface IEventsGrpcClient
 
     /// <summary>
     /// The user ids on an event's roster. One call answers for every recipient a screen asks
-    /// about, which is what the feedback can-create batch relies on.
+    /// about, which is what the feedback can-create batch relies on. The roster is cached, so the
+    /// caller names who it is asking about: a cached copy missing any of them may predate their
+    /// invitation, and is re-read rather than trusted.
     /// </summary>
-    Task<IReadOnlySet<Guid>> GetEventParticipantIdsAsync(Guid eventId);
+    Task<IReadOnlySet<Guid>> GetEventParticipantIdsAsync(Guid eventId, IReadOnlyCollection<Guid> askingAbout);
 
     /// <summary>
     /// Get the context of an event (type, context type, context ID) for authorization.
