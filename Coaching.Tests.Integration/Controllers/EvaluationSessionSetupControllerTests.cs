@@ -242,7 +242,7 @@ public class EvaluationSessionSetupControllerTests
     {
         var session = Session(status);
         session.EventId = Guid.NewGuid();
-        _factory.EventsGrpcClient.GetEventParticipantIdsAsync(session.EventId.Value).Returns(roster.ToHashSet());
+        _factory.EventsGrpcClient.GetEventParticipantIdsAsync(session.EventId.Value, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(roster.ToHashSet());
         await SeedAsync(session);
         return session;
     }
