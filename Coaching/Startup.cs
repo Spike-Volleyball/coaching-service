@@ -213,20 +213,7 @@ namespace Coaching
             services.AddEndpointsApiExplorer();
             services.AddSwaggerGen();
 
-            // CORS
-            var allowedOrigins = Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
-                ?? new[] { "http://localhost:3000" };
-
-            services.AddCors(options =>
-            {
-                options.AddPolicy("AllowFrontend", policy =>
-                {
-                    policy.WithOrigins(allowedOrigins)
-                          .AllowAnyHeader()
-                          .AllowAnyMethod()
-                          .AllowCredentials();
-                });
-            });
+            services.AddFrontendCors(Configuration);
 
             // Health checks
             services.AddHealthChecks();
@@ -240,7 +227,7 @@ namespace Coaching
 
         public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
         {
-            app.UseCors("AllowFrontend");
+            app.UseFrontendCors();
 
             // Prometheus HTTP request metrics
             app.UsePrometheusMetrics();
