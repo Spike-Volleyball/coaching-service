@@ -38,7 +38,8 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
         _eventsClient = Substitute.For<IEventsGrpcClient>();
         _clubsClient = Substitute.For<IClubsGrpcClient>();
         _logger = Substitute.For<ILogger<FeedbackAuthorizationService>>();
-        _sut = new FeedbackAuthorizationService(_eventsClient, _clubsClient, _logger);
+        _sut = new FeedbackAuthorizationService(
+            _eventsClient, _clubsClient, new FeedbackScopeFlights(TimeProvider), _logger);
     }
 
     [Test]

@@ -36,10 +36,13 @@ namespace Coaching.Application.Services;
 /// recipient, and one fact about the recipient: whether they are on the roster the scope names.
 /// The scope is therefore resolved once, and each recipient is judged against it in memory —
 /// a roster screen asking about twenty people costs the same round trips as asking about one.
+/// The questions a burst of can-create requests asks at once share one resolution through
+/// <see cref="FeedbackScopeFlights"/>; creating feedback always resolves its own.
 /// </summary>
 public class FeedbackAuthorizationService(
     IEventsGrpcClient eventsClient,
     IClubsGrpcClient clubsClient,
+    FeedbackScopeFlights flights,
     ILogger<FeedbackAuthorizationService> logger) : IFeedbackAuthorizationService
 {
     private static readonly HashSet<string> AllowedEventTypes = new(StringComparer.OrdinalIgnoreCase)
@@ -66,12 +69,27 @@ public class FeedbackAuthorizationService(
         if (recipients.Count == 0)
             return [];
 
-        var resolved = await ResolveAsync(scope, userId);
+        var (resolution, joined) = flights.Join(scope, userId, () => ResolveAsync(scope, userId));
+        var resolved = await resolution;
+        var verdicts = recipients.ToDictionary(recipient => recipient, resolved.Judge);
+
+        // A resolution another request started can be seconds older than an invitation, so
+        // nobody is turned away as a stranger to the roster on its word alone.
+        var offTheRoster = joined
+            ? verdicts.Where(v => v.Value.OffTheRoster).Select(v => v.Key).ToList()
+            : [];
+        if (offTheRoster.Count > 0)
+        {
+            var own = await ResolveAsync(scope, userId);
+            foreach (var recipient in offTheRoster)
+                verdicts[recipient] = own.Judge(recipient);
+        }
+
         var eligible = new List<Guid>(recipients.Count);
         var denials = new Dictionary<string, int>();
         foreach (var recipient in recipients)
         {
-            var verdict = resolved.Judge(recipient);
+            var verdict = verdicts[recipient];
             if (verdict.CanCreate)
                 eligible.Add(recipient);
             else
@@ -122,7 +140,7 @@ public class FeedbackAuthorizationService(
         // mentioned; that is the order the rule states and the order the reasons read in.
         return new ResolvedScope(userId,
         [
-            new Gate(roster.Contains, "The recipient is not a participant of this event"),
+            Gate.ForRoster(roster, "The recipient is not a participant of this event"),
             Gate.ForCaller(mayGive, deniedReason)
         ], resolvedClubId);
     }
@@ -157,7 +175,7 @@ public class FeedbackAuthorizationService(
 
         var members = await clubsClient.GetUnitMemberIdsAsync(unit.Type, unit.Id);
         return new ResolvedScope(userId,
-            [new Gate(members.Contains, "The recipient is not a member of this team or group")],
+            [Gate.ForRoster(members, "The recipient is not a member of this team or group")],
             clubId);
     }
 
@@ -169,7 +187,7 @@ public class FeedbackAuthorizationService(
 
         var members = await clubsClient.GetClubMemberIdsAsync(clubId);
         return new ResolvedScope(userId,
-            [new Gate(members.Contains, "The recipient is not a member of this club")],
+            [Gate.ForRoster(members, "The recipient is not a member of this club")],
             clubId);
     }
 
@@ -206,15 +224,18 @@ public class FeedbackAuthorizationService(
 
     private readonly record struct UnitContext(ContextType Type, Guid Id);
 
-    private readonly record struct Verdict(bool CanCreate, string Reason, Guid? ResolvedClubId);
+    private readonly record struct Verdict(bool CanCreate, string Reason, Guid? ResolvedClubId, bool OffTheRoster = false);
 
     /// <summary>
     /// One test a recipient must pass, with the reason given when they do not. A test about the
     /// caller admits everyone or no one; a test about the roster admits whoever is on it.
     /// </summary>
-    private sealed record Gate(Func<Guid, bool> Admits, string Reason)
+    private sealed record Gate(Func<Guid, bool> Admits, string Reason, bool ChecksTheRoster = false)
     {
         public static Gate ForCaller(bool mayGive, string deniedReason) => new(_ => mayGive, deniedReason);
+
+        public static Gate ForRoster(IReadOnlySet<Guid> roster, string reason) =>
+            new(roster.Contains, reason, ChecksTheRoster: true);
     }
 
     /// <summary>
@@ -234,7 +255,7 @@ public class FeedbackAuthorizationService(
             var refusedBy = Gates.FirstOrDefault(gate => !gate.Admits(recipientUserId));
             return refusedBy is null
                 ? new Verdict(true, string.Empty, ResolvedClubId)
-                : new Verdict(false, refusedBy.Reason, null);
+                : new Verdict(false, refusedBy.Reason, null, refusedBy.ChecksTheRoster);
         }
     }
 }
