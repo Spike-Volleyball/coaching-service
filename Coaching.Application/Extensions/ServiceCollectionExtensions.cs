@@ -47,6 +47,7 @@ public static class ServiceCollectionExtensions
         // Feedback services
         services.AddScoped<IFeedbackService, FeedbackService>();
         services.AddScoped<IFeedbackAuthorizationService, FeedbackAuthorizationService>();
+        services.AddSingleton<FeedbackScopeFlights>();
         services.AddScoped<IBadgeService, BadgeService>();
         services.AddScoped<IFeedbackMediaUrlSigner, FeedbackMediaUrlSigner>();
         return services;
