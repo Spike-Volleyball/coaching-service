@@ -99,7 +99,7 @@ public class DrillService : IDrillService
         var sortBy = filter.SortBy?.ToLower() ?? "likecount";
         var sortOrder = filter.SortOrder?.ToLower() ?? "desc";
 
-        query = sortBy switch
+        var sorted = sortBy switch
         {
             "name" => sortOrder == "desc" ? query.OrderByDescending(d => d.Name) : query.OrderBy(d => d.Name),
             "createdat" => sortOrder == "desc" ? query.OrderByDescending(d => d.CreatedAt) : query.OrderBy(d => d.CreatedAt),
@@ -107,15 +107,17 @@ public class DrillService : IDrillService
             _ => sortOrder == "desc" ? query.OrderByDescending(d => d.LikeCount) : query.OrderBy(d => d.LikeCount)
         };
 
-        // Apply pagination
+        // Apply pagination. Every split statement below re-applies the order beneath Skip/Take,
+        // so it must be unique or the statements can pick different drills at a page's edge.
         var skip = (filter.Page - 1) * filter.Limit;
-        query = query.Skip(skip).Take(filter.Limit);
+        query = sorted.ThenBy(d => d.Id).Skip(skip).Take(filter.Limit);
 
         var drills = await query
             .Include(d => d.Attachments.OrderBy(a => a.Order))
             .Include(d => d.Equipment.OrderBy(e => e.Order))
             .Include(d => d.Dials.OrderBy(dial => dial.Order))
             .Include(d => d.Creator)
+            .AsSplitQuery()
             .ToListAsync();
 
         var dtos = _mapper.Map<IEnumerable<DrillDto>>(drills);

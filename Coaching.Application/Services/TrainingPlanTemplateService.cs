@@ -428,6 +428,10 @@ public class TrainingPlanService : ITrainingPlanService
                     .ThenInclude(st => st.Coaches)
             .Include(p => p.Coaches)
             .Include(p => p.Creator)
+            .AsSplitQuery()
+            // One plan per event is kept by CreateEventPlanAsync, not by an index; ordering by Id
+            // keeps every split statement on the same plan should a second ever exist.
+            .OrderBy(p => p.Id)
             .FirstOrDefaultAsync(p => p.EventId == eventId && p.PlanType == PlanType.Instance && !p.IsDeleted);
 
         if (plan == null) return null;
@@ -1859,7 +1863,7 @@ public class TrainingPlanService : ITrainingPlanService
         // The clients send "shortest"/"mostLiked"-style names; the older "duration"/"likes" ones
         // are kept so an out-of-date caller keeps the sort it asked for rather than silently
         // falling through to newest.
-        query = filter.SortBy?.ToLower() switch
+        var sorted = filter.SortBy?.ToLower() switch
         {
             "name" => query.OrderBy(t => t.Name),
             "shortest" or "duration" => query.OrderBy(t => t.TotalDuration),
@@ -1870,9 +1874,11 @@ public class TrainingPlanService : ITrainingPlanService
             _ => query.OrderByDescending(t => t.CreatedAt) // newest by default
         };
 
-        // Apply pagination
+        // Apply pagination. Every split statement below re-applies the order beneath Skip/Take,
+        // so it must be unique or the statements can pick different plans at a page's edge.
         var skip = (filter.Page - 1) * filter.PageSize;
-        var items = await query
+        var items = await sorted
+            .ThenBy(t => t.Id)
             .Skip(skip)
             .Take(filter.PageSize)
             .Include(t => t.Items)
@@ -1883,6 +1889,7 @@ public class TrainingPlanService : ITrainingPlanService
                         .ThenInclude(r => r.Drill)
             .Include(t => t.Sections)
             .Include(t => t.Creator)
+            .AsSplitQuery()
             .ToListAsync();
 
         return (items, totalCount);

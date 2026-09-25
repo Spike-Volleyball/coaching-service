@@ -378,6 +378,8 @@ public class RunService : IRunService
             .Include(p => p.Items)
                 .ThenInclude(i => i.Stations)
                     .ThenInclude(s => s.Items)
+            // A single chain: its rows are the plan's leaves, a sum rather than a product.
+            .AsSingleQuery()
             .FirstOrDefaultAsync()
             ?? throw new EntityNotFoundException("No training plan is attached to this event");
 

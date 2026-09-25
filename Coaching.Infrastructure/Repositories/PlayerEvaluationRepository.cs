@@ -29,6 +29,7 @@ public class PlayerEvaluationRepository : BaseRepository<PlayerEvaluation>, IPla
         return await _dbSet
             .Include(e => e.MetricScores.Where(s => !s.IsDeleted))
             .Include(e => e.SkillScores.Where(s => !s.IsDeleted))
+            .AsSplitQuery()
             .FirstOrDefaultAsync(e => e.EvaluationParticipantId == participantId && !e.IsDeleted);
     }
 
