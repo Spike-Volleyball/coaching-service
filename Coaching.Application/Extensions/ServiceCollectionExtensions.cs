@@ -1,6 +1,7 @@
 ﻿using Coaching.Application.Interfaces.Services;
 using Coaching.Application.Mappings;
 using Coaching.Application.Services;
+using Coaching.Application.Services.Facts;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Coaching.Application.Extensions;
@@ -50,6 +51,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<FeedbackScopeFlights>();
         services.AddScoped<IBadgeService, BadgeService>();
         services.AddScoped<IFeedbackMediaUrlSigner, FeedbackMediaUrlSigner>();
+        services.AddScoped<IFactRepublisher, FactRepublisher>();
         return services;
     }
 }

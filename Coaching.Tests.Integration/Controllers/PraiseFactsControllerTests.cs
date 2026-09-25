@@ -7,31 +7,38 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Amazon.S3;
+using Coaching.Application.DTOs.Facts;
 using Coaching.Domain.Enums;
 using Coaching.Domain.Models.Feedback;
 using Coaching.Infrastructure.Data.Context;
 using Coaching.Tests.Integration.Fixtures;
 using FluentAssertions;
 using MassTransit.EntityFrameworkCoreIntegration;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
 using NSubstitute;
 using Shared.Messaging.Contracts.Events.Coaching;
+using Shared.Microservices.Authorization;
 
 namespace Coaching.Tests.Integration.Controllers;
 
 /// <summary>
 /// Every piece of feedback a coach shares reaches the outbox as a praise snapshot, with its badge
 /// if it has one; a badge put on, changed or taken off sends a new copy, and unsharing or deleting
-/// sends it withdrawn.
+/// sends it withdrawn. The admin console republishes the same snapshots for a backfill.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
 public class PraiseFactsControllerTests
 {
+    private const string ConsoleKey = "praise-facts-tests-admin-console-key";
+    private const string RepublishUrl = "/v1/admin/facts/republish";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -56,7 +63,11 @@ public class PraiseFactsControllerTests
         // S3 alone is substituted, as in the other feedback fixtures: the real signer is built
         // for every feedback read, and a real S3 client would look for credentials.
         _host = _factory.WithWebHostBuilder(b =>
-            b.ConfigureTestServices(s => s.AddSingleton(Substitute.For<IAmazonS3>())));
+        {
+            b.ConfigureAppConfiguration(config => config.AddInMemoryCollection(
+                new Dictionary<string, string?> { ["AdminConsole:ApiKey"] = ConsoleKey }));
+            b.ConfigureTestServices(s => s.AddSingleton(Substitute.For<IAmazonS3>()));
+        });
         _client = _host.CreateClient();
     }
 
@@ -255,6 +266,75 @@ public class PraiseFactsControllerTests
         // Assert
         response.StatusCode.Should().Be(HttpStatusCode.NoContent);
         (await OutboxAsync()).Should().BeEmpty();
+    }
+
+    [Test]
+    public async Task Republish_WithTheConsoleKey_PublishesEverySharedFeedbackAgainAndCountsThem()
+    {
+        // Arrange — one feedback shared through the API, whose live copy the republish must repeat;
+        // one shared without a badge; one private and one deleted, which a player cannot see.
+        var liveId = await SeedFeedbackAsync(shared: false, BadgeType.GameIq);
+        var plainId = await SeedFeedbackAsync(shared: true);
+        await SeedFeedbackAsync(shared: false, BadgeType.Star);
+        await SeedFeedbackAsync(shared: true, BadgeType.Star, deleted: true);
+        SetAuth(_coachId);
+        (await _client.PutAsync($"/v1/feedback/{liveId}/share?share=true", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+        var live = (await OutboxAsync()).Should().ContainSingle().Subject;
+        _client.DefaultRequestHeaders.Authorization = null;
+
+        // Act
+        var response = await _client.SendAsync(Republish(ConsoleKey));
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        (await response.Content.ReadFromJsonAsync<FactsRepublishedDto>(JsonOptions))!.Praise.Should().Be(2);
+
+        var republished = (await OutboxAsync()).Skip(1).ToList();
+        republished.Select(f => f.FeedbackId).Should().BeEquivalentTo([liveId, plainId]);
+        republished.Should().OnlyContain(f => f.State == PraiseState.Given);
+        republished.Single(f => f.FeedbackId == plainId).Badge.Should().BeNull();
+        var again = republished.Single(f => f.FeedbackId == liveId);
+        again.SnapshotAt.Should().BeOnOrAfter(live.SnapshotAt);
+        again.Should().BeEquivalentTo(live, o => o
+            .Excluding(f => f.EventId)
+            .Excluding(f => f.Timestamp)
+            .Excluding(f => f.SnapshotAt));
+    }
+
+    [Test]
+    public async Task Republish_BySignedInUserWithoutTheConsoleKey_IsUnauthorized()
+    {
+        // Arrange — shared feedback a republish would send; a user token never passes for the console.
+        await SeedFeedbackAsync(shared: true, BadgeType.Star);
+        SetAuth(_coachId);
+
+        // Act
+        var response = await _client.PostAsync(RepublishUrl, null);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        (await OutboxAsync()).Should().BeEmpty();
+    }
+
+    [Test]
+    public async Task Republish_WithTheWrongKey_IsUnauthorized()
+    {
+        // Arrange
+        await SeedFeedbackAsync(shared: true, BadgeType.Star);
+
+        // Act
+        var response = await _client.SendAsync(Republish("not-the-console-key"));
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        (await OutboxAsync()).Should().BeEmpty();
+    }
+
+    private static HttpRequestMessage Republish(string key)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, RepublishUrl);
+        request.Headers.Add(AdminConsoleKey.HeaderName, key);
+        return request;
     }
 
     /// A context of its own for each read or write, so nothing comes back from a change tracker.
