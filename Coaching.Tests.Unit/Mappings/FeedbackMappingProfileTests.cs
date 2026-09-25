@@ -179,4 +179,41 @@ public class FeedbackMappingProfileTests : UnitTestBase
         // Assert
         media.Url.Should().Be("stored:presigned:clip.mp4");
     }
+
+    [Test]
+    public void Map_FeedbackWithPraise_CarriesItsMessageAndBadge()
+    {
+        // Arrange
+        var feedback = new Feedback
+        {
+            RecipientUserId = Guid.NewGuid(),
+            CoachUserId = Guid.NewGuid(),
+            Praise = new Praise { Message = "Called every ball", BadgeType = BadgeType.LoudAndClear },
+        };
+
+        // Act
+        var dto = _sut.Map<FeedbackDto>(feedback);
+
+        // Assert
+        dto.Praise!.Message.Should().Be("Called every ball");
+        dto.Praise.BadgeType.Should().Be(BadgeType.LoudAndClear);
+    }
+
+    [Test]
+    public void Map_FeedbackWhosePraiseWasRemoved_CarriesNoPraise()
+    {
+        // Arrange
+        var feedback = new Feedback
+        {
+            RecipientUserId = Guid.NewGuid(),
+            CoachUserId = Guid.NewGuid(),
+            Praise = new Praise { Message = "Called every ball", BadgeType = BadgeType.LoudAndClear, IsDeleted = true },
+        };
+
+        // Act
+        var dto = _sut.Map<FeedbackDto>(feedback);
+
+        // Assert
+        dto.Praise.Should().BeNull();
+    }
 }

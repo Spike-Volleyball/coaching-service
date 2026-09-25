@@ -247,7 +247,7 @@ public class FeedbackService(
         // a Publish after the last SaveChangesAsync is silently dropped.
         if (feedback.SharedWithPlayer)
         {
-            var preview = BuildPreview(feedback.ContentPlainText, feedback.Praise?.Message, feedback.ImprovementPoints?.Count ?? 0);
+            var preview = BuildPreview(feedback.ContentPlainText, feedback.LivePraise()?.Message, feedback.ImprovementPoints?.Count ?? 0);
             if (wasShared)
                 await PublishFeedbackUpdatedAsync(feedback, preview);
             else
@@ -380,7 +380,7 @@ public class FeedbackService(
         {
             await PublishFeedbackSharedAsync(
                 feedback,
-                BuildPreview(feedback.ContentPlainText, feedback.Praise?.Message, feedback.ImprovementPoints.Count));
+                BuildPreview(feedback.ContentPlainText, feedback.LivePraise()?.Message, feedback.ImprovementPoints.Count));
         }
 
         await feedbackRepository.SaveChangesAsync();
@@ -586,13 +586,25 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
-        if (feedback.Praise != null)
+        if (feedback.LivePraise() != null)
             throw new ConflictException("Feedback already has praise. Update or remove it first.");
 
-        var praise = mapper.Map<Praise>(request);
-        praise.FeedbackId = feedbackId;
+        // A feedback has one praise row, unique by feedback, and removal only marks it deleted:
+        // praise given again revives that row.
+        if (feedback.Praise is { } removed)
+        {
+            removed.IsDeleted = false;
+            removed.Message = request.Message;
+            removed.BadgeType = request.BadgeType;
+            praiseRepository.Update(removed);
+        }
+        else
+        {
+            var praise = mapper.Map<Praise>(request);
+            praise.FeedbackId = feedbackId;
+            praiseRepository.Add(praise);
+        }
 
-        praiseRepository.Add(praise);
         await praiseRepository.SaveChangesAsync();
 
         return await GetByIdAsync(feedbackId, userId) ?? throw new Exception("Failed to retrieve feedback");
@@ -607,13 +619,13 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
-        if (feedback.Praise == null)
+        if (feedback.LivePraise() is not { } praise)
             throw new EntityNotFoundException("Feedback has no praise");
 
-        if (request.Message != null) feedback.Praise.Message = request.Message;
-        if (request.BadgeType.HasValue) feedback.Praise.BadgeType = request.BadgeType;
+        if (request.Message != null) praise.Message = request.Message;
+        if (request.BadgeType.HasValue) praise.BadgeType = request.BadgeType;
 
-        praiseRepository.Update(feedback.Praise);
+        praiseRepository.Update(praise);
         await praiseRepository.SaveChangesAsync();
 
         return await GetByIdAsync(feedbackId, userId) ?? throw new Exception("Failed to retrieve feedback");
@@ -628,10 +640,10 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
-        if (feedback.Praise != null)
+        if (feedback.LivePraise() is { } praise)
         {
-            feedback.Praise.IsDeleted = true;
-            praiseRepository.Update(feedback.Praise);
+            praise.IsDeleted = true;
+            praiseRepository.Update(praise);
             await praiseRepository.SaveChangesAsync();
         }
 
