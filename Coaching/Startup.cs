@@ -251,11 +251,12 @@ namespace Coaching
             app.UseRouting();
 
             app.UseAuthentication();
-            app.UseMiddleware<JwtBlacklistMiddleware>();
             app.UseAuthorization();
 
             app.UseMiddleware<ErrorHandlerMiddleware>();
-            // After the error handler: the refusal it throws must be shaped into a 400, not escape as a 500.
+            // After the error handler: the refusals these throw must be shaped into the 401 or 400
+            // they are, not escape as a 500.
+            app.UseMiddleware<JwtBlacklistMiddleware>();
             app.UseMiddleware<GuardianContextMiddleware>();
 
             var internalListenerPort = Configuration.GetInternalListenerPort();
