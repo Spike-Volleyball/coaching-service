@@ -41,6 +41,7 @@ public class TrainingPlanRepository : BaseRepository<TrainingPlan>, ITrainingPla
                     .ThenInclude(st => st.Coaches)
             .Include(t => t.Coaches)
             .Include(t => t.Creator)
+            .AsSplitQuery()
             .FirstOrDefaultAsync(t => t.Id == id && !t.IsDeleted);
     }
 

@@ -129,6 +129,7 @@ public class DrillsControllerTests
             .AsNoTracking()
             .Include(d => d.Equipment.OrderBy(e => e.Order))
             .Include(d => d.Variations.OrderBy(v => v.Order))
+            .AsSplitQuery()
             .SingleAsync(d => d.Id == created.Id);
 
         persisted.Should().BeEquivalentTo(new
@@ -301,6 +302,7 @@ public class DrillsControllerTests
             .AsNoTracking()
             .Include(d => d.Equipment.OrderBy(e => e.Order))
             .Include(d => d.Variations.OrderBy(v => v.Order))
+            .AsSplitQuery()
             .SingleAsync(d => d.Id == source.Id);
 
         persisted.Should().BeEquivalentTo(new

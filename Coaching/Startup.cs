@@ -2,6 +2,7 @@ using Asp.Versioning;
 using Coaching.Application.Extensions;
 using Coaching.Infrastructure.Data.Context;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Coaching.Application.Interfaces.Repositories;
 using Coaching.Application.Interfaces.Services;
 using Coaching.Infrastructure.Repositories;
@@ -79,7 +80,16 @@ namespace Coaching
             // Database
             var connectionString = Configuration.GetConnectionString("DefaultConnection");
             services.AddDbContext<CoachingDbContext>(options =>
-                options.UseNpgsql(connectionString));
+            {
+                options.UseNpgsql(connectionString);
+                // A query loading two collections in one statement returns their cartesian product,
+                // which grows with every child row and cannot be seen where the query is written.
+                // Everywhere but production such a query throws until it says AsSplitQuery or
+                // AsSingleQuery; production only logs it, so a path that no test or staging run
+                // reached is slow rather than broken.
+                if (!Environment.IsProduction())
+                    options.ConfigureWarnings(w => w.Throw(RelationalEventId.MultipleCollectionIncludeWarning));
+            });
 
             // Bind DbContext for BaseRepository
             services.AddScoped<DbContext>(provider => provider.GetRequiredService<CoachingDbContext>());
