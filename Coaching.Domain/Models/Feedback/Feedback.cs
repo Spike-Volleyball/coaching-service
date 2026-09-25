@@ -30,4 +30,10 @@ public class Feedback : BaseEntity
     public virtual ICollection<ImprovementPoint> ImprovementPoints { get; set; } = new List<ImprovementPoint>();
     public virtual ICollection<FeedbackMedia> Media { get; set; } = new List<FeedbackMedia>();
     public virtual Praise? Praise { get; set; }
+
+    /// <summary>
+    /// The praise the feedback carries now. Removing praise only marks its row deleted, so
+    /// <see cref="Praise"/> alone can still hold one that was taken back.
+    /// </summary>
+    public Praise? LivePraise() => Praise is { IsDeleted: false } praise ? praise : null;
 }

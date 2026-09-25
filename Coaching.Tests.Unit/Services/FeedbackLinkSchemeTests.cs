@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using AutoMapper;
 using Coaching.Application.DTOs.Feedback;
 using Coaching.Application.Interfaces.Repositories;
@@ -131,7 +132,7 @@ public class FeedbackLinkSchemeTests : UnitTestBase
     {
         // Arrange
         var feedback = CoachesFeedback();
-        _feedbackRepository.GetByIdAsync(feedback.Id).Returns(feedback);
+        _feedbackRepository.GetByIdAsync(feedback.Id, Arg.Any<Expression<Func<Feedback, object>>[]>()).Returns(feedback);
         var request = new UpdateFeedbackDto
         {
             Content = "<p>Rewritten</p>",

@@ -2,6 +2,7 @@ using AutoMapper;
 using Coaching.Application.DTOs.Feedback;
 using Coaching.Application.Interfaces.Repositories;
 using Coaching.Application.Interfaces.Services;
+using Coaching.Application.Services.Facts;
 using Coaching.Application.Validation;
 using Coaching.Domain.Models.Feedback;
 using Ganss.Xss;
@@ -158,6 +159,7 @@ public class FeedbackService(
         {
             var praise = mapper.Map<Praise>(request.Praise);
             praise.FeedbackId = feedback.Id;
+            feedback.Praise = praise;
             praiseRepository.Add(praise);
             await praiseRepository.SaveChangesAsync();
         }
@@ -180,6 +182,7 @@ public class FeedbackService(
             await PublishFeedbackSharedAsync(
                 feedback,
                 BuildPreview(feedback.ContentPlainText, request.Praise?.Message, request.ImprovementPoints?.Count ?? 0));
+            await PublishPraiseIfMovedAsync(feedback, PraiseFact.None);
             await feedbackRepository.SaveChangesAsync();
         }
 
@@ -204,7 +207,7 @@ public class FeedbackService(
 
     public async Task<FeedbackDto> UpdateAsync(Guid id, UpdateFeedbackDto request, Guid userId)
     {
-        var feedback = await feedbackRepository.GetByIdAsync(id);
+        var feedback = await feedbackRepository.GetByIdAsync(id, f => f.Praise!);
         if (feedback == null)
             throw new EntityNotFoundException("Feedback not found");
 
@@ -235,6 +238,7 @@ public class FeedbackService(
             feedback.Comment = feedback.ContentPlainText;
         }
 
+        var praiseBefore = PraiseFact.Of(feedback);
         var wasShared = feedback.SharedWithPlayer;
         if (request.SharedWithPlayer.HasValue) feedback.SharedWithPlayer = request.SharedWithPlayer.Value;
 
@@ -247,13 +251,14 @@ public class FeedbackService(
         // a Publish after the last SaveChangesAsync is silently dropped.
         if (feedback.SharedWithPlayer)
         {
-            var preview = BuildPreview(feedback.ContentPlainText, feedback.Praise?.Message, feedback.ImprovementPoints?.Count ?? 0);
+            var preview = BuildPreview(feedback.ContentPlainText, feedback.LivePraise()?.Message, feedback.ImprovementPoints?.Count ?? 0);
             if (wasShared)
                 await PublishFeedbackUpdatedAsync(feedback, preview);
             else
                 await PublishFeedbackSharedAsync(feedback, preview);
         }
 
+        await PublishPraiseIfMovedAsync(feedback, praiseBefore);
         await feedbackRepository.SaveChangesAsync();
 
         return await GetByIdAsync(id, userId) ?? throw new Exception("Failed to retrieve feedback");
@@ -308,8 +313,11 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can delete this feedback");
 
+        // A withdrawn snapshot carries no badge, so taking the feedback back needs no praise loaded.
+        var praiseBefore = PraiseFact.Of(feedback);
         feedback.IsDeleted = true;
         feedbackRepository.Update(feedback);
+        await PublishPraiseIfMovedAsync(feedback, praiseBefore);
         await feedbackRepository.SaveChangesAsync();
     }
 
@@ -371,6 +379,7 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can share this feedback");
 
+        var praiseBefore = PraiseFact.Of(feedback);
         var wasShared = feedback.SharedWithPlayer;
         feedback.SharedWithPlayer = share;
         feedbackRepository.Update(feedback);
@@ -380,9 +389,10 @@ public class FeedbackService(
         {
             await PublishFeedbackSharedAsync(
                 feedback,
-                BuildPreview(feedback.ContentPlainText, feedback.Praise?.Message, feedback.ImprovementPoints.Count));
+                BuildPreview(feedback.ContentPlainText, feedback.LivePraise()?.Message, feedback.ImprovementPoints.Count));
         }
 
+        await PublishPraiseIfMovedAsync(feedback, praiseBefore);
         await feedbackRepository.SaveChangesAsync();
 
         return await GetByIdAsync(id, userId) ?? throw new Exception("Failed to retrieve feedback");
@@ -586,13 +596,29 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
-        if (feedback.Praise != null)
+        if (feedback.LivePraise() != null)
             throw new ConflictException("Feedback already has praise. Update or remove it first.");
 
-        var praise = mapper.Map<Praise>(request);
-        praise.FeedbackId = feedbackId;
+        var praiseBefore = PraiseFact.Of(feedback);
 
-        praiseRepository.Add(praise);
+        // A feedback has one praise row, unique by feedback, and removal only marks it deleted:
+        // praise given again revives that row.
+        if (feedback.Praise is { } removed)
+        {
+            removed.IsDeleted = false;
+            removed.Message = request.Message;
+            removed.BadgeType = request.BadgeType;
+            praiseRepository.Update(removed);
+        }
+        else
+        {
+            var praise = mapper.Map<Praise>(request);
+            praise.FeedbackId = feedbackId;
+            feedback.Praise = praise;
+            praiseRepository.Add(praise);
+        }
+
+        await PublishPraiseIfMovedAsync(feedback, praiseBefore);
         await praiseRepository.SaveChangesAsync();
 
         return await GetByIdAsync(feedbackId, userId) ?? throw new Exception("Failed to retrieve feedback");
@@ -607,13 +633,15 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
-        if (feedback.Praise == null)
+        if (feedback.LivePraise() is not { } praise)
             throw new EntityNotFoundException("Feedback has no praise");
 
-        if (request.Message != null) feedback.Praise.Message = request.Message;
-        if (request.BadgeType.HasValue) feedback.Praise.BadgeType = request.BadgeType;
+        var praiseBefore = PraiseFact.Of(feedback);
+        if (request.Message != null) praise.Message = request.Message;
+        if (request.BadgeType.HasValue) praise.BadgeType = request.BadgeType;
 
-        praiseRepository.Update(feedback.Praise);
+        praiseRepository.Update(praise);
+        await PublishPraiseIfMovedAsync(feedback, praiseBefore);
         await praiseRepository.SaveChangesAsync();
 
         return await GetByIdAsync(feedbackId, userId) ?? throw new Exception("Failed to retrieve feedback");
@@ -628,10 +656,12 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
-        if (feedback.Praise != null)
+        if (feedback.LivePraise() is { } praise)
         {
-            feedback.Praise.IsDeleted = true;
-            praiseRepository.Update(feedback.Praise);
+            var praiseBefore = PraiseFact.Of(feedback);
+            praise.IsDeleted = true;
+            praiseRepository.Update(praise);
+            await PublishPraiseIfMovedAsync(feedback, praiseBefore);
             await praiseRepository.SaveChangesAsync();
         }
 
@@ -783,6 +813,19 @@ public class FeedbackService(
             CoachName = await ResolveCoachNameAsync(feedback.CoachUserId),
             Preview = preview,
         });
+    }
+
+    /// <summary>
+    /// Publishes the feedback's praise snapshot when a change moved what the player holds from it:
+    /// shared or taken back, or its badge put on, changed or taken off. Never gated on who is
+    /// notified, and called before the save, which is what writes a publish to the outbox.
+    /// </summary>
+    private Task PublishPraiseIfMovedAsync(Feedback feedback, PraiseFact before)
+    {
+        var after = PraiseFact.Of(feedback);
+        return after == before
+            ? Task.CompletedTask
+            : publishEndpoint.Publish(after.Snapshot(feedback, timeProvider.GetUtcNow().UtcDateTime));
     }
 
     private async Task<string> ResolveCoachNameAsync(Guid coachUserId)
