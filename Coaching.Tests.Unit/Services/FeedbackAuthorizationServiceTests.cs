@@ -49,7 +49,7 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
         var request = new CreateFeedbackDto { RecipientUserId = PlayerId, EventId = EventId };
         _eventsClient.GetEventContextAsync(EventId)
             .Returns(new EventContext("TrainingSession", "Club", ClubId));
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster(PlayerId));
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(Roster(PlayerId));
         _clubsClient.CanGiveFeedbackInClubAsync(CoachId, ClubId)
             .Returns(true);
 
@@ -67,7 +67,7 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
         var request = new CreateFeedbackDto { RecipientUserId = PlayerId, EventId = EventId };
         _eventsClient.GetEventContextAsync(EventId)
             .Returns(new EventContext("TrainingSession", "Club", ClubId));
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster(PlayerId));
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(Roster(PlayerId));
         _clubsClient.CanGiveFeedbackInClubAsync(CoachId, ClubId)
             .Returns(false);
 
@@ -87,7 +87,7 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
         var request = new CreateFeedbackDto { RecipientUserId = PlayerId, EventId = EventId };
         _eventsClient.GetEventContextAsync(EventId)
             .Returns(new EventContext("TrainingSession", "Club", ClubId));
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster(PlayerId));
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(Roster(PlayerId));
         _clubsClient.CanGiveFeedbackInClubAsync(CoachId, otherClubId).Returns(true);
         _clubsClient.CanGiveFeedbackInClubAsync(CoachId, ClubId).Returns(false);
 
@@ -108,7 +108,7 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
         var request = new CreateFeedbackDto { RecipientUserId = PlayerId, EventId = EventId };
         _eventsClient.GetEventContextAsync(EventId)
             .Returns(new EventContext("TrainingSession", "Club", ClubId));
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster(PlayerId));
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(Roster(PlayerId));
         _eventsClient.IsEventAdminAsync(EventId, CoachId).Returns(true);
         _clubsClient.CanGiveFeedbackInClubAsync(CoachId, ClubId).Returns(false);
 
@@ -128,7 +128,7 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
         var request = new CreateFeedbackDto { RecipientUserId = PlayerId, EventId = EventId };
         _eventsClient.GetEventContextAsync(EventId)
             .Returns(new EventContext("Match", "None", null));
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster(PlayerId));
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(Roster(PlayerId));
         _eventsClient.IsEventAdminAsync(EventId, CoachId)
             .Returns(true);
 
@@ -146,7 +146,7 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
         var request = new CreateFeedbackDto { RecipientUserId = PlayerId, EventId = EventId };
         _eventsClient.GetEventContextAsync(EventId)
             .Returns(new EventContext("Match", "None", null));
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster(PlayerId));
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(Roster(PlayerId));
         _eventsClient.IsEventAdminAsync(EventId, CoachId)
             .Returns(false);
 
@@ -166,7 +166,7 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
         var groupId = Guid.NewGuid();
         _eventsClient.GetEventContextAsync(EventId)
             .Returns(new EventContext("TrainingSession", "Group", groupId));
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster(PlayerId));
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(Roster(PlayerId));
         _eventsClient.IsEventAdminAsync(EventId, CoachId)
             .Returns(true);
 
@@ -185,7 +185,7 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
         var teamId = Guid.NewGuid();
         _eventsClient.GetEventContextAsync(EventId)
             .Returns(new EventContext("Match", "Team", teamId));
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster(PlayerId));
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(Roster(PlayerId));
         _eventsClient.IsEventAdminAsync(EventId, CoachId)
             .Returns(true);
 
@@ -210,7 +210,7 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
         // Assert
         await act.Should().ThrowAsync<ForbiddenException>()
             .WithMessage("*CasualPlay*");
-        await _eventsClient.DidNotReceiveWithAnyArgs().GetEventParticipantIdsAsync(default);
+        await _eventsClient.DidNotReceiveWithAnyArgs().GetEventParticipantIdsAsync(default, default!);
     }
 
     [Test]
@@ -220,7 +220,7 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
         var request = new CreateFeedbackDto { RecipientUserId = PlayerId, EventId = EventId };
         _eventsClient.GetEventContextAsync(EventId)
             .Returns(new EventContext("TrainingSession", "Club", ClubId));
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster());
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(Roster());
 
         // Act
         var act = () => _sut.ValidateCreateAsync(request, CoachId);
@@ -258,7 +258,7 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
         };
         _eventsClient.GetEventContextAsync(EventId)
             .Returns(new EventContext("TrainingSession", "Club", ClubId));
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster(PlayerId));
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(Roster(PlayerId));
         _clubsClient.CanGiveFeedbackInClubAsync(CoachId, ClubId)
             .Returns(true);
 
@@ -278,7 +278,7 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
         var request = new CreateFeedbackDto { RecipientUserId = PlayerId, EventId = EventId };
         _eventsClient.GetEventContextAsync(EventId)
             .Returns(new EventContext("TrainingSession", "Team", TeamId));
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster(PlayerId));
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(Roster(PlayerId));
         _eventsClient.IsEventAdminAsync(EventId, CoachId).Returns(false);
         _clubsClient.ResolveClubIdAsync(ContextType.Team, TeamId).Returns(ClubId);
         _clubsClient.CanGiveFeedbackInUnitAsync(CoachId, ContextType.Team, TeamId).Returns(true);
@@ -297,7 +297,7 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
         var request = new CreateFeedbackDto { RecipientUserId = PlayerId, EventId = EventId };
         _eventsClient.GetEventContextAsync(EventId)
             .Returns(new EventContext("Evaluation", "Group", GroupId));
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster(PlayerId));
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(Roster(PlayerId));
         _eventsClient.IsEventAdminAsync(EventId, CoachId).Returns(false);
         _clubsClient.ResolveClubIdAsync(ContextType.Group, GroupId).Returns(ClubId);
         _clubsClient.CanGiveFeedbackInUnitAsync(CoachId, ContextType.Group, GroupId).Returns(true);
@@ -316,7 +316,7 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
         var request = new CreateFeedbackDto { RecipientUserId = PlayerId, EventId = EventId };
         _eventsClient.GetEventContextAsync(EventId)
             .Returns(new EventContext("Match", "Team", TeamId));
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster(PlayerId));
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(Roster(PlayerId));
         _eventsClient.IsEventAdminAsync(EventId, CoachId).Returns(false);
         _clubsClient.ResolveClubIdAsync(ContextType.Team, TeamId).Returns(ClubId);
         _clubsClient.CanGiveFeedbackInUnitAsync(CoachId, ContextType.Team, TeamId).Returns(false);
@@ -339,7 +339,7 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
         var request = new CreateFeedbackDto { RecipientUserId = PlayerId, EventId = EventId };
         _eventsClient.GetEventContextAsync(EventId)
             .Returns(new EventContext("Match", unitType.ToString(), unitId));
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster(PlayerId));
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(Roster(PlayerId));
         _eventsClient.IsEventAdminAsync(EventId, CoachId).Returns(false);
         _clubsClient.ResolveClubIdAsync(unitType, unitId).Returns(ClubId);
         _clubsClient.CanGiveFeedbackInUnitAsync(CoachId, unitType, unitId).Returns(false);
@@ -364,7 +364,7 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
         var request = new CreateFeedbackDto { RecipientUserId = PlayerId, EventId = EventId };
         _eventsClient.GetEventContextAsync(EventId)
             .Returns(new EventContext("Match", unitType.ToString(), unitId));
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster(PlayerId));
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(Roster(PlayerId));
         _eventsClient.IsEventAdminAsync(EventId, CoachId).Returns(true);
         _clubsClient.ResolveClubIdAsync(unitType, unitId).Returns(ClubId);
         _clubsClient.CanGiveFeedbackInUnitAsync(CoachId, unitType, unitId).Returns(false);
@@ -384,7 +384,7 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
         var request = new CreateFeedbackDto { RecipientUserId = PlayerId, EventId = EventId };
         _eventsClient.GetEventContextAsync(EventId)
             .Returns(new EventContext("Match", "Team", TeamId));
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster(PlayerId));
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(Roster(PlayerId));
         _eventsClient.IsEventAdminAsync(EventId, CoachId).Returns(false);
         _clubsClient.ResolveClubIdAsync(ContextType.Team, TeamId).Returns(ClubId);
         _clubsClient.CanGiveFeedbackInUnitAsync(CoachId, ContextType.Team, TeamId).Returns(false);
@@ -688,7 +688,7 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
         // Arrange
         _eventsClient.GetEventContextAsync(EventId)
             .Returns(new EventContext("TrainingSession", "Team", TeamId));
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster(PlayerId, CoachId));
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(Roster(PlayerId, CoachId));
         _clubsClient.ResolveClubIdAsync(ContextType.Team, TeamId).Returns(ClubId);
         _eventsClient.IsEventAdminAsync(EventId, CoachId).Returns(caller == Caller.EventAdmin);
         _clubsClient.CanGiveFeedbackInClubAsync(CoachId, ClubId).Returns(caller == Caller.ClubCoach);
@@ -722,7 +722,7 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
         var strangers = Enumerable.Range(0, 10).Select(_ => Guid.NewGuid()).ToList();
         _eventsClient.GetEventContextAsync(EventId)
             .Returns(new EventContext("Match", "None", null));
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(Roster(participants.ToArray()));
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(Roster(participants.ToArray()));
         _eventsClient.IsEventAdminAsync(EventId, CoachId).Returns(true);
 
         // Act
@@ -732,8 +732,44 @@ public class FeedbackAuthorizationServiceTests : UnitTestBase
         // Assert
         eligible.Should().BeEquivalentTo(participants);
         await _eventsClient.Received(1).GetEventContextAsync(EventId);
-        await _eventsClient.Received(1).GetEventParticipantIdsAsync(EventId);
+        await _eventsClient.Received(1).GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>());
         await _eventsClient.Received(1).IsEventAdminAsync(EventId, CoachId);
+    }
+
+    [Test]
+    public async Task ValidateCreateAsync_OnAnEvent_AsksTheRosterAboutTheRecipient()
+    {
+        // Arrange — naming the recipient lets a cached roster that predates their invitation be re-read.
+        var request = new CreateFeedbackDto { RecipientUserId = PlayerId, EventId = EventId };
+        _eventsClient.GetEventContextAsync(EventId)
+            .Returns(new EventContext("Match", "None", null));
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(Roster(PlayerId));
+        _eventsClient.IsEventAdminAsync(EventId, CoachId).Returns(true);
+
+        // Act
+        await _sut.ValidateCreateAsync(request, CoachId);
+
+        // Assert
+        await _eventsClient.Received(1).GetEventParticipantIdsAsync(
+            EventId, Arg.Is<IReadOnlyCollection<Guid>>(ids => ids.SequenceEqual(new[] { PlayerId })));
+    }
+
+    [Test]
+    public async Task GetEligibleRecipientsAsync_OnAnEvent_AsksTheRosterAboutEveryRecipient()
+    {
+        // Arrange
+        var stranger = Guid.NewGuid();
+        _eventsClient.GetEventContextAsync(EventId)
+            .Returns(new EventContext("Match", "None", null));
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(Roster(PlayerId));
+        _eventsClient.IsEventAdminAsync(EventId, CoachId).Returns(true);
+
+        // Act
+        await _sut.GetEligibleRecipientsAsync(EventScope(), [PlayerId, stranger], CoachId);
+
+        // Assert
+        await _eventsClient.Received(1).GetEventParticipantIdsAsync(
+            EventId, Arg.Is<IReadOnlyCollection<Guid>>(ids => ids.SequenceEqual(new[] { PlayerId, stranger })));
     }
 
     [Test]

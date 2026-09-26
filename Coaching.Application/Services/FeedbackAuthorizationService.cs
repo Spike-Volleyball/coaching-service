@@ -52,7 +52,7 @@ public class FeedbackAuthorizationService(
 
     public async Task<Guid?> ValidateCreateAsync(CreateFeedbackDto request, Guid userId)
     {
-        var scope = await ResolveAsync(FeedbackScope.Of(request), userId);
+        var scope = await ResolveAsync(FeedbackScope.Of(request), [request.RecipientUserId], userId);
         var verdict = scope.Judge(request.RecipientUserId);
         if (!verdict.CanCreate)
             throw new ForbiddenException(verdict.Reason);
@@ -69,7 +69,7 @@ public class FeedbackAuthorizationService(
         if (recipients.Count == 0)
             return [];
 
-        var (resolution, joined) = flights.Join(scope, userId, () => ResolveAsync(scope, userId));
+        var (resolution, joined) = flights.Join(scope, userId, () => ResolveAsync(scope, recipients, userId));
         var resolved = await resolution;
         var verdicts = recipients.ToDictionary(recipient => recipient, resolved.Judge);
 
@@ -80,7 +80,7 @@ public class FeedbackAuthorizationService(
             : [];
         if (offTheRoster.Count > 0)
         {
-            var own = await ResolveAsync(scope, userId);
+            var own = await ResolveAsync(scope, offTheRoster, userId);
             foreach (var recipient in offTheRoster)
                 verdicts[recipient] = own.Judge(recipient);
         }
@@ -106,10 +106,10 @@ public class FeedbackAuthorizationService(
         return eligible;
     }
 
-    private async Task<ResolvedScope> ResolveAsync(FeedbackScope scope, Guid userId)
+    private async Task<ResolvedScope> ResolveAsync(FeedbackScope scope, IReadOnlyCollection<Guid> recipients, Guid userId)
     {
         if (scope.EventId is { } eventId)
-            return await ResolveEventLinkedAsync(eventId, userId);
+            return await ResolveEventLinkedAsync(eventId, recipients, userId);
 
         if (UnitOf(scope.ContextType, scope.ContextId) is { } unit)
             return await ResolveStandaloneUnitAsync(unit, userId);
@@ -120,7 +120,7 @@ public class FeedbackAuthorizationService(
         return ResolvedScope.Rejected(userId, "Either eventId or clubId must be provided");
     }
 
-    private async Task<ResolvedScope> ResolveEventLinkedAsync(Guid eventId, Guid userId)
+    private async Task<ResolvedScope> ResolveEventLinkedAsync(Guid eventId, IReadOnlyCollection<Guid> recipients, Guid userId)
     {
         var eventContext = await eventsClient.GetEventContextAsync(eventId);
         if (eventContext == null)
@@ -130,7 +130,7 @@ public class FeedbackAuthorizationService(
             return ResolvedScope.Rejected(userId,
                 $"Feedback cannot be given on {eventContext.EventType} events. Allowed types: TrainingSession, Evaluation, Trial, Match");
 
-        var participants = eventsClient.GetEventParticipantIdsAsync(eventId);
+        var participants = eventsClient.GetEventParticipantIdsAsync(eventId, recipients);
         var authority = ResolveEventAuthorityAsync(eventId, eventContext, userId);
         await Task.WhenAll(participants, authority);
         var roster = await participants;

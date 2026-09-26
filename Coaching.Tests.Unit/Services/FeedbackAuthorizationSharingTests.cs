@@ -52,7 +52,7 @@ public class FeedbackAuthorizationSharingTests : UnitTestBase
         // Arrange — the roster read is held open so every request is in flight together.
         var players = Enumerable.Range(0, 22).Select(_ => Guid.NewGuid()).ToArray();
         var roster = new TaskCompletionSource<IReadOnlySet<Guid>>();
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(roster.Task);
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(roster.Task);
 
         // Act
         var asks = players
@@ -65,7 +65,7 @@ public class FeedbackAuthorizationSharingTests : UnitTestBase
         for (var i = 0; i < players.Length; i++)
             answers[i].Should().Equal(players[i]);
         await _eventsClient.Received(1).GetEventContextAsync(EventId);
-        await _eventsClient.Received(1).GetEventParticipantIdsAsync(EventId);
+        await _eventsClient.Received(1).GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>());
         await _clubsClient.Received(1).CanGiveFeedbackInClubAsync(CoachId, ClubId);
     }
 
@@ -75,7 +75,7 @@ public class FeedbackAuthorizationSharingTests : UnitTestBase
         // Arrange
         var player = Guid.NewGuid();
         var roster = new TaskCompletionSource<IReadOnlySet<Guid>>();
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(roster.Task);
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(roster.Task);
         _clubsClient.CanGiveFeedbackInClubAsync(OtherCoachId, ClubId).Returns(false);
 
         // Act
@@ -95,7 +95,7 @@ public class FeedbackAuthorizationSharingTests : UnitTestBase
     {
         // Arrange
         var player = Guid.NewGuid();
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(new HashSet<Guid> { player });
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(new HashSet<Guid> { player });
         await NewRequest().GetEligibleRecipientsAsync(ClubEvent, [player], CoachId);
         TimeProvider.Advance(FeedbackScopeFlights.AnswersFor - TimeSpan.FromSeconds(1));
 
@@ -112,7 +112,7 @@ public class FeedbackAuthorizationSharingTests : UnitTestBase
     {
         // Arrange — the caller lost their club role in between.
         var player = Guid.NewGuid();
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(new HashSet<Guid> { player });
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(new HashSet<Guid> { player });
         _clubsClient.CanGiveFeedbackInClubAsync(CoachId, ClubId).Returns(true, false);
         await NewRequest().GetEligibleRecipientsAsync(ClubEvent, [player], CoachId);
         TimeProvider.Advance(FeedbackScopeFlights.AnswersFor);
@@ -131,7 +131,7 @@ public class FeedbackAuthorizationSharingTests : UnitTestBase
         // Arrange — the roster the burst resolved is older than the newcomer's invitation.
         var player = Guid.NewGuid();
         var newcomer = Guid.NewGuid();
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(
             new HashSet<Guid> { player }, new HashSet<Guid> { player, newcomer });
         await NewRequest().GetEligibleRecipientsAsync(ClubEvent, [player], CoachId);
 
@@ -140,7 +140,7 @@ public class FeedbackAuthorizationSharingTests : UnitTestBase
 
         // Assert
         eligible.Should().Equal(newcomer);
-        await _eventsClient.Received(2).GetEventParticipantIdsAsync(EventId);
+        await _eventsClient.Received(2).GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>());
     }
 
     [Test]
@@ -148,7 +148,7 @@ public class FeedbackAuthorizationSharingTests : UnitTestBase
     {
         // Arrange
         var player = Guid.NewGuid();
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(
             _ => throw new RpcException(new Status(StatusCode.Unavailable, "events-service is down")),
             _ => new HashSet<Guid> { player });
         var failed = () => NewRequest().GetEligibleRecipientsAsync(ClubEvent, [player], CoachId);
@@ -159,7 +159,7 @@ public class FeedbackAuthorizationSharingTests : UnitTestBase
 
         // Assert
         eligible.Should().Equal(player);
-        await _eventsClient.Received(2).GetEventParticipantIdsAsync(EventId);
+        await _eventsClient.Received(2).GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>());
     }
 
     [Test]
@@ -167,7 +167,7 @@ public class FeedbackAuthorizationSharingTests : UnitTestBase
     {
         // Arrange — a write authorises on facts of its own, never on a burst's.
         var player = Guid.NewGuid();
-        _eventsClient.GetEventParticipantIdsAsync(EventId).Returns(new HashSet<Guid> { player });
+        _eventsClient.GetEventParticipantIdsAsync(EventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(new HashSet<Guid> { player });
         await NewRequest().GetEligibleRecipientsAsync(ClubEvent, [player], CoachId);
 
         // Act

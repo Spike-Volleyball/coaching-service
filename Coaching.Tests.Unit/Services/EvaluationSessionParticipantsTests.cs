@@ -46,7 +46,7 @@ public class EvaluationSessionParticipantsTests : UnitTestBase
         _participants = Substitute.For<IEvaluationParticipantRepository>();
         _events = Substitute.For<IEventsGrpcClient>();
         _clubs = Substitute.For<IClubsGrpcClient>();
-        _events.GetEventParticipantIdsAsync(_eventId).Returns(new HashSet<Guid> { _onTheEvent, _alsoOnTheEvent });
+        _events.GetEventParticipantIdsAsync(_eventId, Arg.Any<IReadOnlyCollection<Guid>>()).Returns(new HashSet<Guid> { _onTheEvent, _alsoOnTheEvent });
         _clubs.GetClubMemberIdsAsync(_clubId).Returns(new HashSet<Guid> { _onTheEvent });
 
         _rows = [];
@@ -101,6 +101,20 @@ public class EvaluationSessionParticipantsTests : UnitTestBase
     }
 
     [Test]
+    public async Task AddParticipantsAsync_AtAnEvent_AsksTheRosterAboutThePlayersBeingAdded()
+    {
+        // Arrange — naming them lets a cached roster that predates an invitation be re-read.
+        var session = Session();
+
+        // Act
+        await _sut.AddParticipantsAsync(session.Id, Adding(_onTheEvent, _alsoOnTheEvent), _coachId);
+
+        // Assert
+        await _events.Received(1).GetEventParticipantIdsAsync(
+            _eventId, Arg.Is<IReadOnlyCollection<Guid>>(ids => ids.SequenceEqual(new[] { _onTheEvent, _alsoOnTheEvent })));
+    }
+
+    [Test]
     public async Task AddParticipantsAsync_WithSomeoneNotOnTheEvent_ThrowsNamingThemAndAddsNobody()
     {
         // Arrange
@@ -128,7 +142,7 @@ public class EvaluationSessionParticipantsTests : UnitTestBase
         // Assert
         var error = (await act.Should().ThrowAsync<ValidationException>()).Which;
         error.FieldErrors.Select(e => e.Field).Should().Equal("playerIds[0]");
-        await _events.DidNotReceive().GetEventParticipantIdsAsync(Arg.Any<Guid>());
+        await _events.DidNotReceive().GetEventParticipantIdsAsync(Arg.Any<Guid>(), Arg.Any<IReadOnlyCollection<Guid>>());
     }
 
     [TestCase(EvaluationSessionStatus.Running)]

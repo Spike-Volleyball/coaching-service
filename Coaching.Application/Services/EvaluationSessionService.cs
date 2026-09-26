@@ -218,7 +218,7 @@ public class EvaluationSessionService(
     private async Task EnsureOnRosterAsync(EvaluationSession session, IReadOnlyList<Guid> playerIds)
     {
         var roster = session.EventId is { } eventId
-            ? await eventsClient.GetEventParticipantIdsAsync(eventId)
+            ? await eventsClient.GetEventParticipantIdsAsync(eventId, playerIds)
             : await clubsClient.GetClubMemberIdsAsync(session.ClubId);
 
         var strangers = playerIds
