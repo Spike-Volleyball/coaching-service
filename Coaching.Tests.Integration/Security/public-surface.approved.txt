@@ -1,0 +1,1 @@
+ANY /health - Liveness probe for Docker and the gateway; reports no data

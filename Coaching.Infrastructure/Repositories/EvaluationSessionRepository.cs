@@ -22,6 +22,8 @@ public class EvaluationSessionRepository : BaseRepository<EvaluationSession>, IE
                         .ThenInclude(e => e.Metrics.Where(m => !m.IsDeleted))
             .Include(s => s.Participants.Where(p => !p.IsDeleted))
                 .ThenInclude(p => p.Evaluation)
+            .Include(s => s.Groups.Where(g => !g.IsDeleted).OrderBy(g => g.Order))
+                .ThenInclude(g => g.Players.Where(p => !p.IsDeleted))
             .FirstOrDefaultAsync(s => s.Id == id && !s.IsDeleted);
     }
 

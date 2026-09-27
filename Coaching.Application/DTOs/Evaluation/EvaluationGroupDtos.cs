@@ -29,7 +29,16 @@ public record CreateGroupDto
 public record UpdateGroupDto
 {
     public string? Name { get; set; }
+
+    /// <summary>The evaluator to put on the group; null leaves the current one.</summary>
     public Guid? EvaluatorUserId { get; set; }
+
+    /// <summary>
+    /// Takes the evaluator off the group, which only a draft allows: a session starts only when
+    /// every group has one. A null <see cref="EvaluatorUserId"/> already means "leave it", so
+    /// clearing needs its own word.
+    /// </summary>
+    public bool ClearEvaluator { get; set; }
 }
 
 public record AutoSplitGroupsDto

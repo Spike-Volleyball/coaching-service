@@ -412,6 +412,53 @@ public class RunServiceTests : UnitTestBase
         await _broadcaster.Received(1).BroadcastRunUpdatedAsync(EventId, Arg.Any<RunDto>());
     }
 
+    // ---------- Who may watch ----------
+
+    [Test]
+    public async Task CanReadRunAsync_ThePlansCreator_MayWithoutAskingEventsService()
+    {
+        // Arrange
+        StubPlanQuery(BuildPlan());
+
+        // Act
+        var mayRead = await _sut.CanReadRunAsync(EventId, CreatorId);
+
+        // Assert
+        mayRead.Should().BeTrue();
+        await _eventsGrpcClient.DidNotReceive().IsEventParticipantAsync(Arg.Any<Guid>(), Arg.Any<Guid>());
+    }
+
+    [TestCase(true, false, true)]
+    [TestCase(false, true, true)]
+    [TestCase(false, false, false)]
+    public async Task CanReadRunAsync_SomeoneElse_MayWhenOnTheEventAsAParticipantOrAHost(bool participant, bool host, bool expected)
+    {
+        // Arrange
+        StubPlanQuery(BuildPlan());
+        _eventsGrpcClient.IsEventParticipantAsync(EventId, OtherUserId).Returns((participant, true));
+        _eventsGrpcClient.IsEventAdminAsync(EventId, OtherUserId).Returns(host);
+
+        // Act
+        var mayRead = await _sut.CanReadRunAsync(EventId, OtherUserId);
+
+        // Assert
+        mayRead.Should().Be(expected);
+    }
+
+    [Test]
+    public async Task CanReadRunAsync_ForAnEventThatDoesNotExist_IsFalse()
+    {
+        // Arrange
+        StubPlanQuery(BuildPlan());
+        _eventsGrpcClient.IsEventParticipantAsync(EventId, OtherUserId).Returns((false, false));
+
+        // Act
+        var mayRead = await _sut.CanReadRunAsync(EventId, OtherUserId);
+
+        // Assert
+        mayRead.Should().BeFalse();
+    }
+
     // ---------- Get ----------
 
     [Test]

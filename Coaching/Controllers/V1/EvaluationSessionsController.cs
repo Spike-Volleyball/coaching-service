@@ -40,15 +40,20 @@ public class EvaluationSessionsController : Shared.Microservices.Controllers.Bas
     [HttpGet("clubs/{clubId:guid}/evaluation-sessions")]
     public async Task<IActionResult> GetByClubId(Guid clubId, [FromQuery] int page = 1, [FromQuery] int pageSize = 20)
     {
-        var sessions = await _sessionService.GetByClubIdAsync(clubId, page, pageSize);
+        CheckIsUserLoggedIn();
+        var sessions = await _sessionService.GetByClubIdAsync(clubId, JwtPayload.UserId, page, pageSize);
         return Ok(sessions);
     }
 
+    /// <summary>
+    /// No session is public, so an anonymous caller is asked to sign in before anything is looked
+    /// up — the same 401 whether or not the session exists.
+    /// </summary>
     [HttpGet("evaluation-sessions/{id:guid}")]
     public async Task<IActionResult> GetById(Guid id)
     {
-        var session = await _sessionService.GetByIdAsync(id);
-        if (session == null) return NotFound();
+        CheckIsUserLoggedIn();
+        var session = await _sessionService.GetByIdForUserAsync(id, JwtPayload.UserId);
         return Ok(session);
     }
 
@@ -130,7 +135,7 @@ public class EvaluationSessionsController : Shared.Microservices.Controllers.Bas
     public async Task<IActionResult> GetProgress(Guid id)
     {
         CheckIsUserLoggedIn();
-        var progress = await _lifecycleService.GetSessionProgressAsync(id);
+        var progress = await _lifecycleService.GetSessionProgressAsync(id, JwtPayload.UserId);
         return Ok(progress);
     }
 
@@ -222,7 +227,7 @@ public class EvaluationSessionsController : Shared.Microservices.Controllers.Bas
     public async Task<IActionResult> GetSessionScores(Guid sessionId)
     {
         CheckIsUserLoggedIn();
-        var scores = await _scoringService.GetSessionScoresAsync(sessionId);
+        var scores = await _scoringService.GetSessionScoresAsync(sessionId, JwtPayload.UserId);
         return Ok(scores);
     }
 
@@ -230,7 +235,7 @@ public class EvaluationSessionsController : Shared.Microservices.Controllers.Bas
     public async Task<IActionResult> GetGroupExerciseScores(Guid sessionId, Guid groupId, Guid exerciseId)
     {
         CheckIsUserLoggedIn();
-        var scores = await _scoringService.GetGroupExerciseScoresAsync(sessionId, groupId, exerciseId);
+        var scores = await _scoringService.GetGroupExerciseScoresAsync(sessionId, groupId, exerciseId, JwtPayload.UserId);
         return Ok(scores);
     }
 }

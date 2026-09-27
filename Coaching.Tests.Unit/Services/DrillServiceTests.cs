@@ -113,7 +113,7 @@ public class DrillServiceTests
     }
 
     [Test]
-    public async Task GetByIdAsync_PrivateClubDrill_NonMemberIsForbidden()
+    public async Task GetByIdAsync_PrivateClubDrill_NonMemberGetsTheNotFoundAMissingDrillGives()
     {
         // Arrange
         var clubDrill = BuildDrill(clubId: ClubId);
@@ -124,7 +124,7 @@ public class DrillServiceTests
         var act = () => _sut.GetByIdAsync(clubDrill.Id, UserId);
 
         // Assert
-        await act.Should().ThrowAsync<Shared.Exceptions.ForbiddenException>();
+        await act.Should().ThrowAsync<Shared.Exceptions.EntityNotFoundException>();
     }
 
     [Test]

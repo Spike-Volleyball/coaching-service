@@ -23,21 +23,33 @@ public class FeedbackMediaUrlSigner(
 
     public string SignReadUrl(string url)
     {
-        if (string.IsNullOrEmpty(url)) return url;
-
-        var publicBase = s3Settings.Value.PublicBaseUrl.TrimEnd('/') + "/";
-        if (!url.StartsWith(publicBase, StringComparison.OrdinalIgnoreCase)) return url;
-
-        var key = url[publicBase.Length..];
-        var queryStart = key.IndexOf('?');
-        if (queryStart >= 0) key = key[..queryStart];
+        if (!IsStored(url)) return url;
 
         return s3.GetPreSignedURL(new GetPreSignedUrlRequest
         {
             BucketName = s3Settings.Value.Bucket,
-            Key = key,
+            Key = KeyOf(url),
             Verb = HttpVerb.GET,
             Expires = timeProvider.GetUtcNow().UtcDateTime.Add(ReadUrlLifetime),
         });
+    }
+
+    public bool IsStored(string url) =>
+        !string.IsNullOrEmpty(url) && url.StartsWith(PublicBase, StringComparison.OrdinalIgnoreCase);
+
+    public string ToStoredUrl(string url)
+    {
+        var sent = url.Trim();
+        return IsStored(sent) ? PublicBase + KeyOf(sent) : sent;
+    }
+
+    private string PublicBase => s3Settings.Value.PublicBaseUrl.TrimEnd('/') + "/";
+
+    /// <summary>The object key a URL into our bucket names, without any query a presign put on it.</summary>
+    private string KeyOf(string storedUrl)
+    {
+        var key = storedUrl[PublicBase.Length..];
+        var queryStart = key.IndexOf('?');
+        return queryStart >= 0 ? key[..queryStart] : key;
     }
 }

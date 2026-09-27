@@ -51,16 +51,20 @@ public class EventsGrpcClient : IEventsGrpcClient
 
     public async Task<(bool IsParticipant, bool EventExists)> IsEventParticipantAsync(Guid eventId, Guid userId)
     {
-        var participants = await GetEventParticipantIdsAsync(eventId);
+        var participants = await GetEventParticipantIdsAsync(eventId, [userId]);
         // A roster that came back proves the event exists.
         return (participants.Contains(userId), true);
     }
 
-    public async Task<IReadOnlySet<Guid>> GetEventParticipantIdsAsync(Guid eventId)
+    public async Task<IReadOnlySet<Guid>> GetEventParticipantIdsAsync(Guid eventId, IReadOnlyCollection<Guid> askingAbout)
     {
         var cacheKey = $"{ParticipantsCacheKeyPrefix}{eventId}";
 
-        if (_cache.TryGetValue(cacheKey, out IReadOnlySet<Guid>? cached) && cached != null)
+        // Nothing evicts the roster when someone is invited, so a copy missing a person being
+        // asked about may simply be older than their invitation. Only a hit is trusted; a miss
+        // costs one fresh read, which then replaces the cached copy.
+        if (_cache.TryGetValue(cacheKey, out IReadOnlySet<Guid>? cached) && cached != null
+            && askingAbout.All(cached.Contains))
             return cached;
 
         try

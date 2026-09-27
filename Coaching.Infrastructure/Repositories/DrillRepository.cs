@@ -20,6 +20,7 @@ public class DrillRepository : BaseRepository<Drill>, IDrillRepository
             .Include(d => d.Equipment.OrderBy(e => e.Order))
             .Include(d => d.Dials.OrderBy(dial => dial.Order))
             .Include(d => d.Creator)
+            .AsSplitQuery()
             .OrderByDescending(d => d.CreatedAt)
             .ToListAsync();
     }
@@ -32,6 +33,7 @@ public class DrillRepository : BaseRepository<Drill>, IDrillRepository
             .Include(d => d.Equipment.OrderBy(e => e.Order))
             .Include(d => d.Dials.OrderBy(dial => dial.Order))
             .Include(d => d.Creator)
+            .AsSplitQuery()
             .OrderByDescending(d => d.CreatedAt)
             .ToListAsync();
     }
@@ -45,6 +47,7 @@ public class DrillRepository : BaseRepository<Drill>, IDrillRepository
             .Include(d => d.Variations.OrderBy(v => v.Order))
                 .ThenInclude(v => v.TargetDrill)
             .Include(d => d.Creator)
+            .AsSplitQuery()
             .FirstOrDefaultAsync(d => d.Id == id);
     }
 
@@ -56,6 +59,7 @@ public class DrillRepository : BaseRepository<Drill>, IDrillRepository
             .Include(d => d.Dials.OrderBy(dial => dial.Order))
             .Include(d => d.Variations.OrderBy(v => v.Order))
                 .ThenInclude(v => v.TargetDrill)
+            .AsSplitQuery()
             .FirstOrDefaultAsync(d => d.Id == id);
     }
 }

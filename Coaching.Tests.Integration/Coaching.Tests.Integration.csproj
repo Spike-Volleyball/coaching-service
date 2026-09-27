@@ -34,6 +34,7 @@
 		<ProjectReference Include="..\Coaching.Domain\Coaching.Domain.csproj" />
 		<ProjectReference Include="..\Coaching.Infrastructure\Coaching.Infrastructure.csproj" />
 		<ProjectReference Include="..\shared\Shared.Testing\Shared.Testing.csproj" />
+		<ProjectReference Include="..\shared\Shared.Testing.Security\Shared.Testing.Security.csproj" />
 	</ItemGroup>
 
 </Project>

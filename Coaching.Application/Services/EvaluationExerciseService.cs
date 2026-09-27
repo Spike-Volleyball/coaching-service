@@ -14,8 +14,11 @@ public class EvaluationExerciseService(
     IEvaluationExerciseRepository exerciseRepository,
     IRepository<EvaluationMetric> metricRepository,
     IRepository<MetricSkillWeight> weightRepository,
+    IEvaluationAccess access,
     IMapper mapper) : IEvaluationExerciseService
 {
+    private const string ExerciseNotFound = "Exercise not found";
+
     public async Task<EvaluationExerciseDto> CreateAsync(CreateEvaluationExerciseDto request, Guid userId)
     {
         if (string.IsNullOrWhiteSpace(request.Name))
@@ -37,17 +40,26 @@ public class EvaluationExerciseService(
             }
         }
 
-        return await GetByIdAsync(exercise.Id) ?? throw new Exception("Failed to retrieve created exercise");
+        return await FindAsync(exercise.Id) ?? throw new Exception("Failed to retrieve created exercise");
     }
 
-    public async Task<EvaluationExerciseDto?> GetByIdAsync(Guid id)
+    public async Task<EvaluationExerciseDto> GetByIdForUserAsync(Guid id, Guid userId)
     {
         var exercise = await exerciseRepository.GetByIdWithMetricsAsync(id);
-        return exercise == null ? null : mapper.Map<EvaluationExerciseDto>(exercise);
+
+        // A refusal answers as a missing exercise does, so a stranger cannot tell the two apart.
+        if (exercise == null || !await access.MayReadExerciseAsync(exercise, userId))
+            throw new EntityNotFoundException(ExerciseNotFound);
+
+        return mapper.Map<EvaluationExerciseDto>(exercise);
     }
 
-    public async Task<IEnumerable<EvaluationExerciseDto>> GetByClubIdAsync(Guid clubId)
+    public async Task<IEnumerable<EvaluationExerciseDto>> GetByClubIdAsync(Guid clubId, Guid userId)
     {
+        // Someone without standing sees what a club with no exercises of its own shows.
+        if (!await access.MayReadClubAsync(clubId, userId))
+            return [];
+
         var exercises = await exerciseRepository.GetByClubIdAsync(clubId);
         return mapper.Map<IEnumerable<EvaluationExerciseDto>>(exercises);
     }
@@ -86,7 +98,7 @@ public class EvaluationExerciseService(
     {
         var exercise = await exerciseRepository.GetByIdAsync(id);
         if (exercise == null)
-            throw new EntityNotFoundException("Exercise not found");
+            throw new EntityNotFoundException(ExerciseNotFound);
 
         if (exercise.CreatedByUserId != userId)
             throw new ForbiddenException("Only the creator can update this exercise");
@@ -98,14 +110,14 @@ public class EvaluationExerciseService(
         exerciseRepository.Update(exercise);
         await exerciseRepository.SaveChangesAsync();
 
-        return await GetByIdAsync(id) ?? throw new Exception("Failed to retrieve exercise");
+        return await FindAsync(id) ?? throw new Exception("Failed to retrieve exercise");
     }
 
     public async Task DeleteAsync(Guid id, Guid userId)
     {
         var exercise = await exerciseRepository.GetByIdAsync(id);
         if (exercise == null)
-            throw new EntityNotFoundException("Exercise not found");
+            throw new EntityNotFoundException(ExerciseNotFound);
 
         if (exercise.CreatedByUserId != userId)
             throw new ForbiddenException("Only the creator can delete this exercise");
@@ -119,7 +131,7 @@ public class EvaluationExerciseService(
     {
         var exercise = await exerciseRepository.GetByIdWithMetricsAsync(exerciseId);
         if (exercise == null)
-            throw new EntityNotFoundException("Exercise not found");
+            throw new EntityNotFoundException(ExerciseNotFound);
 
         if (exercise.CreatedByUserId != userId)
             throw new ForbiddenException("Only the creator can modify this exercise");
@@ -138,14 +150,14 @@ public class EvaluationExerciseService(
             SkillWeights = request.SkillWeights
         }, order);
 
-        return await GetByIdAsync(exerciseId) ?? throw new Exception("Failed to retrieve exercise");
+        return await FindAsync(exerciseId) ?? throw new Exception("Failed to retrieve exercise");
     }
 
     public async Task<EvaluationExerciseDto> UpdateMetricAsync(Guid exerciseId, Guid metricId, UpdateEvaluationMetricDto request, Guid userId)
     {
         var exercise = await exerciseRepository.GetByIdAsync(exerciseId);
         if (exercise == null)
-            throw new EntityNotFoundException("Exercise not found");
+            throw new EntityNotFoundException(ExerciseNotFound);
 
         if (exercise.CreatedByUserId != userId)
             throw new ForbiddenException("Only the creator can modify this exercise");
@@ -162,14 +174,14 @@ public class EvaluationExerciseService(
         metricRepository.Update(metric);
         await metricRepository.SaveChangesAsync();
 
-        return await GetByIdAsync(exerciseId) ?? throw new Exception("Failed to retrieve exercise");
+        return await FindAsync(exerciseId) ?? throw new Exception("Failed to retrieve exercise");
     }
 
     public async Task<EvaluationExerciseDto> RemoveMetricAsync(Guid exerciseId, Guid metricId, Guid userId)
     {
         var exercise = await exerciseRepository.GetByIdAsync(exerciseId);
         if (exercise == null)
-            throw new EntityNotFoundException("Exercise not found");
+            throw new EntityNotFoundException(ExerciseNotFound);
 
         if (exercise.CreatedByUserId != userId)
             throw new ForbiddenException("Only the creator can modify this exercise");
@@ -182,14 +194,14 @@ public class EvaluationExerciseService(
         metricRepository.Update(metric);
         await metricRepository.SaveChangesAsync();
 
-        return await GetByIdAsync(exerciseId) ?? throw new Exception("Failed to retrieve exercise");
+        return await FindAsync(exerciseId) ?? throw new Exception("Failed to retrieve exercise");
     }
 
     public async Task<EvaluationExerciseDto> UpdateMetricSkillWeightsAsync(Guid exerciseId, Guid metricId, List<CreateMetricSkillWeightDto> weights, Guid userId)
     {
         var exercise = await exerciseRepository.GetByIdAsync(exerciseId);
         if (exercise == null)
-            throw new EntityNotFoundException("Exercise not found");
+            throw new EntityNotFoundException(ExerciseNotFound);
 
         if (exercise.CreatedByUserId != userId)
             throw new ForbiddenException("Only the creator can modify this exercise");
@@ -216,7 +228,7 @@ public class EvaluationExerciseService(
         }
         await weightRepository.SaveChangesAsync();
 
-        return await GetByIdAsync(exerciseId) ?? throw new Exception("Failed to retrieve exercise");
+        return await FindAsync(exerciseId) ?? throw new Exception("Failed to retrieve exercise");
     }
 
     private async Task AddMetricInternal(Guid exerciseId, CreateEvaluationMetricDto request, int order)
@@ -245,5 +257,12 @@ public class EvaluationExerciseService(
         var totalPercentage = weights.Sum(w => w.Percentage);
         if (Math.Abs(totalPercentage - 100) > 0.01m)
             throw new BadRequestException($"Skill weights must sum to 100%, got {totalPercentage}%", ErrorCodeEnum.ValidationError);
+    }
+
+    /// <summary>The exercise a write just touched, for its answer: the writer is its author.</summary>
+    private async Task<EvaluationExerciseDto?> FindAsync(Guid id)
+    {
+        var exercise = await exerciseRepository.GetByIdWithMetricsAsync(id);
+        return exercise == null ? null : mapper.Map<EvaluationExerciseDto>(exercise);
     }
 }

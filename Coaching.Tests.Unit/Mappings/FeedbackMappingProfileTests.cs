@@ -31,6 +31,8 @@ public class FeedbackMappingProfileTests : UnitTestBase
 
         var signer = Substitute.For<IFeedbackMediaUrlSigner>();
         signer.SignReadUrl(Arg.Any<string>()).Returns(call => $"signed:{call.Arg<string>()}");
+        signer.IsStored(Arg.Any<string>()).Returns(call => call.Arg<string>().StartsWith("s3://"));
+        signer.ToStoredUrl(Arg.Any<string>()).Returns(call => $"stored:{call.Arg<string>()}");
 
         var services = new ServiceCollection();
         services.AddApplicationMappings();
@@ -93,5 +95,125 @@ public class FeedbackMappingProfileTests : UnitTestBase
         // Assert
         dto.Attachments.Should().ContainSingle()
             .Which.Url.Should().Be("signed:s3://photo.jpg");
+    }
+
+    [Test]
+    public void Map_FeedbackWithAttachments_SaysWhichAreUploadedFilesAndWhichAreLinks()
+    {
+        // Arrange — the row stores no source; the web editor needs one to put a file in the
+        // uploader and a link in the link dialog, and our bucket is what tells them apart.
+        var feedback = new Feedback
+        {
+            RecipientUserId = Guid.NewGuid(),
+            CoachUserId = Guid.NewGuid(),
+            Media =
+            [
+                new FeedbackMedia { Url = "s3://photo.jpg", Type = FeedbackMediaType.Image, Order = 0 },
+                new FeedbackMedia { Url = "https://youtu.be/abc", Type = FeedbackMediaType.Video, Order = 1 },
+            ],
+        };
+
+        // Act
+        var dto = _sut.Map<FeedbackDto>(feedback);
+
+        // Assert
+        dto.Attachments.Select(a => a.Source).Should().Equal(FeedbackMediaSource.File, FeedbackMediaSource.Link);
+    }
+
+    [Test]
+    public void Map_APointsMedia_SaysFileWhenItsUrlIsInOurBucketWhateverTheRowStored()
+    {
+        // Arrange — the phone sends no source, so a file it uploaded is stored as a Link, and the
+        // web editor then treats it as one: it compares the url, which every read signs afresh, and
+        // replaces the "changed" link on each edit. The url answers the question, as it does for a
+        // feedback's own attachments.
+        var feedback = new Feedback
+        {
+            RecipientUserId = Guid.NewGuid(),
+            CoachUserId = Guid.NewGuid(),
+            ImprovementPoints =
+            [
+                new ImprovementPoint
+                {
+                    Description = "Keep the platform still",
+                    MediaLinks =
+                    [
+                        new ImprovementPointMedia { Url = "s3://from-the-phone.jpg", Type = FeedbackMediaType.Image, Source = FeedbackMediaSource.Link },
+                        new ImprovementPointMedia { Url = "https://youtu.be/abc", Type = FeedbackMediaType.Video, Source = FeedbackMediaSource.File },
+                    ],
+                },
+            ],
+        };
+
+        // Act
+        var dto = _sut.Map<FeedbackDto>(feedback);
+
+        // Assert
+        dto.ImprovementPoints.Single().MediaLinks.Select(m => m.Source)
+            .Should().Equal(FeedbackMediaSource.File, FeedbackMediaSource.Link);
+    }
+
+    [Test]
+    public void Map_AnAttachmentAClientSent_StoresTheUrlTheSignerWouldKeep()
+    {
+        // Arrange — reads sign on the way out, so writes undo it on the way in: an editor holds a
+        // presigned URL that expires, and storing it would take the player's file with it.
+        var sent = new CreateFeedbackMediaDto { Url = "presigned:photo.jpg", Type = FeedbackMediaType.Image };
+
+        // Act
+        var media = _sut.Map<FeedbackMedia>(sent);
+
+        // Assert
+        media.Url.Should().Be("stored:presigned:photo.jpg");
+    }
+
+    [Test]
+    public void Map_APointsMediaAClientSent_StoresTheUrlTheSignerWouldKeep()
+    {
+        // Arrange
+        var sent = new CreateImprovementPointMediaDto { Url = "presigned:clip.mp4", Type = FeedbackMediaType.Video, Source = FeedbackMediaSource.File };
+
+        // Act
+        var media = _sut.Map<ImprovementPointMedia>(sent);
+
+        // Assert
+        media.Url.Should().Be("stored:presigned:clip.mp4");
+    }
+
+    [Test]
+    public void Map_FeedbackWithPraise_CarriesItsMessageAndBadge()
+    {
+        // Arrange
+        var feedback = new Feedback
+        {
+            RecipientUserId = Guid.NewGuid(),
+            CoachUserId = Guid.NewGuid(),
+            Praise = new Praise { Message = "Called every ball", BadgeType = BadgeType.LoudAndClear },
+        };
+
+        // Act
+        var dto = _sut.Map<FeedbackDto>(feedback);
+
+        // Assert
+        dto.Praise!.Message.Should().Be("Called every ball");
+        dto.Praise.BadgeType.Should().Be(BadgeType.LoudAndClear);
+    }
+
+    [Test]
+    public void Map_FeedbackWhosePraiseWasRemoved_CarriesNoPraise()
+    {
+        // Arrange
+        var feedback = new Feedback
+        {
+            RecipientUserId = Guid.NewGuid(),
+            CoachUserId = Guid.NewGuid(),
+            Praise = new Praise { Message = "Called every ball", BadgeType = BadgeType.LoudAndClear, IsDeleted = true },
+        };
+
+        // Act
+        var dto = _sut.Map<FeedbackDto>(feedback);
+
+        // Assert
+        dto.Praise.Should().BeNull();
     }
 }

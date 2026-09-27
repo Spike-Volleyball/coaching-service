@@ -29,15 +29,20 @@ public class EvaluationPlansController : Shared.Microservices.Controllers.BaseAp
     [HttpGet("clubs/{clubId:guid}/evaluation-plans")]
     public async Task<IActionResult> GetByClubId(Guid clubId)
     {
-        var plans = await _planService.GetByClubIdAsync(clubId);
+        CheckIsUserLoggedIn();
+        var plans = await _planService.GetByClubIdAsync(clubId, JwtPayload.UserId);
         return Ok(plans);
     }
 
+    /// <summary>
+    /// No plan is public, so an anonymous caller is asked to sign in before anything is looked up —
+    /// the same 401 whether or not the plan exists.
+    /// </summary>
     [HttpGet("evaluation-plans/{id:guid}")]
     public async Task<IActionResult> GetById(Guid id)
     {
-        var plan = await _planService.GetByIdAsync(id);
-        if (plan == null) return NotFound();
+        CheckIsUserLoggedIn();
+        var plan = await _planService.GetByIdForUserAsync(id, JwtPayload.UserId);
         return Ok(plan);
     }
 

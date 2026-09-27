@@ -1,9 +1,8 @@
 using Asp.Versioning;
 using Coaching.Application.Extensions;
 using Coaching.Infrastructure.Data.Context;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.IdentityModel.Tokens;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Coaching.Application.Interfaces.Repositories;
 using Coaching.Application.Interfaces.Services;
 using Coaching.Infrastructure.Repositories;
@@ -19,10 +18,15 @@ using Shared.Messaging.Extensions;
 using Shared.Options;
 using Shared.Services.Analytics;
 using Shared.Services.Extensions;
-using System.Text;
 using Shared.Middleware;
 using Shared.Extensions;
 using Shared.Microservices.Extensions;
+using Coaching.Authorization;
+using Shared.Security.Access;
+using Shared.Security.Authentication;
+using Shared.Security.Authorization;
+using Shared.Security.Endpoints;
+using Shared.Security.Output;
 using OpenTelemetry.Trace;
 
 namespace Coaching
@@ -49,6 +53,9 @@ namespace Coaching
                     // Replace collections from the request body instead of appending to
                     // pre-populated defaults on the DTO (Newtonsoft's Auto mode appends).
                     options.SerializerSettings.ObjectCreationHandling = Newtonsoft.Json.ObjectCreationHandling.Replace;
+                    // No entity goes out, or comes in as a body: it carries whatever EF had loaded.
+                    options.SerializerSettings.ContractResolver =
+                        new EntityGuardContractResolver(options.SerializerSettings.ContractResolver);
                 });
 
             services.ConfigureProblemDetailsValidation();
@@ -73,7 +80,16 @@ namespace Coaching
             // Database
             var connectionString = Configuration.GetConnectionString("DefaultConnection");
             services.AddDbContext<CoachingDbContext>(options =>
-                options.UseNpgsql(connectionString));
+            {
+                options.UseNpgsql(connectionString);
+                // A query loading two collections in one statement returns their cartesian product,
+                // which grows with every child row and cannot be seen where the query is written.
+                // Everywhere but production such a query throws until it says AsSplitQuery or
+                // AsSingleQuery; production only logs it, so a path that no test or staging run
+                // reached is slow rather than broken.
+                if (!Environment.IsProduction())
+                    options.ConfigureWarnings(w => w.Throw(RelationalEventId.MultipleCollectionIncludeWarning));
+            });
 
             // Bind DbContext for BaseRepository
             services.AddScoped<DbContext>(provider => provider.GetRequiredService<CoachingDbContext>());
@@ -153,10 +169,6 @@ namespace Coaching
                 options.Configuration = Configuration.GetValue<string>("Redis:ConnectionString");
             });
 
-            // JWT & Auth
-            services.Configure<JwtSettings>(Configuration.GetSection("Jwt"));
-            var jwtSettings = Configuration.GetSection("Jwt").Get<JwtSettings>();
-
             services.AddMessaging<CoachingDbContext>(options =>
             {
                 options.Host = Configuration["RabbitMQ:Host"] ?? "localhost";
@@ -175,39 +187,12 @@ namespace Coaching
                 bus.AddRetryingConsumer<Coaching.Application.Consumers.UserDeletionConfirmedConsumer>();
             });
 
-            if (jwtSettings != null)
-            {
-                services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-                    .AddJwtBearer(options =>
-                    {
-                        options.TokenValidationParameters = new TokenValidationParameters
-                        {
-                            ValidateIssuerSigningKey = true,
-                            IssuerSigningKey = new SymmetricSecurityKey(Encoding.ASCII.GetBytes(jwtSettings.Secret)),
-                            ValidateIssuer = true,
-                            ValidIssuer = jwtSettings.Issuer,
-                            ValidateAudience = true,
-                            ValidAudience = jwtSettings.Audience,
-                            ValidateLifetime = true,
-                            ClockSkew = TimeSpan.Zero
-                        };
-                        options.Events = new JwtBearerEvents
-                        {
-                            OnMessageReceived = context =>
-                            {
-                                var accessToken = context.Request.Query["access_token"];
-                                var path = context.HttpContext.Request.Path;
-                                if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs"))
-                                {
-                                    context.Token = accessToken;
-                                }
-                                return Task.CompletedTask;
-                            }
-                        };
-                    });
-            }
-
-            services.AddAuthorization();
+            // Deny by default: anything that declares nothing needs a signed-in user (SPI-6446).
+            services.AddSpikeAuthentication(Configuration);
+            services.AddSpikeAuthorization();
+            services.AddScoped<IResourceAuthority<DrillAccess>, DrillAuthority>();
+            services.AddScoped<IResourceAuthority<EvaluationSessionAccess>, EvaluationSessionAuthority>();
+            services.AddScoped<IResourceAuthority<RunAccess>, RunAuthority>();
 
             // SignalR
             var signalRBuilder = services.AddSignalR(options =>
@@ -222,6 +207,7 @@ namespace Coaching
                     System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles;
                 options.PayloadSerializerOptions.Converters.Add(
                     new System.Text.Json.Serialization.JsonStringEnumConverter());
+                EntityGuard.Guard(options.PayloadSerializerOptions);
             });
 
             var signalRRedisConnection = Configuration.GetValue<string>("Redis:ConnectionString");
@@ -237,20 +223,7 @@ namespace Coaching
             services.AddEndpointsApiExplorer();
             services.AddSwaggerGen();
 
-            // CORS
-            var allowedOrigins = Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
-                ?? new[] { "http://localhost:3000" };
-
-            services.AddCors(options =>
-            {
-                options.AddPolicy("AllowFrontend", policy =>
-                {
-                    policy.WithOrigins(allowedOrigins)
-                          .AllowAnyHeader()
-                          .AllowAnyMethod()
-                          .AllowCredentials();
-                });
-            });
+            services.AddFrontendCors(Configuration);
 
             // Health checks
             services.AddHealthChecks();
@@ -264,7 +237,7 @@ namespace Coaching
 
         public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
         {
-            app.UseCors("AllowFrontend");
+            app.UseFrontendCors();
 
             // Prometheus HTTP request metrics
             app.UsePrometheusMetrics();
@@ -278,21 +251,24 @@ namespace Coaching
             app.UseRouting();
 
             app.UseAuthentication();
-            app.UseMiddleware<JwtBlacklistMiddleware>();
             app.UseAuthorization();
 
             app.UseMiddleware<ErrorHandlerMiddleware>();
-            // After the error handler: the refusal it throws must be shaped into a 400, not escape as a 500.
+            // After the error handler: the refusals these throw must be shaped into the 401 or 400
+            // they are, not escape as a 500.
+            app.UseMiddleware<JwtBlacklistMiddleware>();
             app.UseMiddleware<GuardianContextMiddleware>();
 
+            var internalListenerPort = Configuration.GetInternalListenerPort();
             app.UseEndpoints(endpoints =>
             {
                 endpoints.MapControllers();
                 endpoints.MapHub<Coaching.Hubs.EvaluationHub>("/hubs/evaluation");
                 endpoints.MapHub<Coaching.Hubs.TrainingRunHub>("/hubs/trainingrun");
-                endpoints.MapGrpcService<Grpc.CoachingInternalServiceImpl>();
-                endpoints.MapHealthChecks("/health");
-                endpoints.MapGrpcHealthChecksService();
+                endpoints.MapInternalGrpcService<Grpc.CoachingInternalServiceImpl>(internalListenerPort);
+                endpoints.MapHealthChecks("/health")
+                    .AllowPublic("Liveness probe for Docker and the gateway; reports no data");
+                endpoints.MapGrpcHealthChecksService().RequireInternalListener(internalListenerPort);
             });
         }
     }

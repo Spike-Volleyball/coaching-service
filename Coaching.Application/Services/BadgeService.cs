@@ -13,6 +13,8 @@ public class BadgeService(
     IRepository<PlayerBadge> badgeRepository,
     IMapper mapper) : IBadgeService
 {
+    public const int MaxPageSize = 50;
+
     public async Task<PlayerBadgeDto> AwardBadgeAsync(AwardBadgeDto request, Guid awardedByUserId)
     {
         if (request.PraiseId == null && request.EventId == null)
@@ -40,7 +42,7 @@ public class BadgeService(
             .Where(b => b.UserId == userId)
             .OrderByDescending(b => b.CreatedAt)
             .Skip((page - 1) * pageSize)
-            .Take(pageSize)
+            .Take(Math.Clamp(pageSize, 1, MaxPageSize))
             .ToListAsync();
 
         return badges.Select(MapToDto);
@@ -73,18 +75,12 @@ public class BadgeService(
         };
     }
 
-    public async Task<IEnumerable<PlayerBadgeDto>> GetRecentBadgesAsync(Guid? eventId = null, int limit = 10)
+    public async Task<IEnumerable<PlayerBadgeDto>> GetRecentBadgesAsync(Guid userId, int limit = 10)
     {
-        var query = badgeRepository.Query();
-
-        if (eventId.HasValue)
-        {
-            query = query.Where(b => b.EventId == eventId.Value);
-        }
-
-        var badges = await query
+        var badges = await badgeRepository.Query()
+            .Where(b => b.UserId == userId)
             .OrderByDescending(b => b.CreatedAt)
-            .Take(limit)
+            .Take(Math.Clamp(limit, 1, MaxPageSize))
             .ToListAsync();
 
         return badges.Select(MapToDto);

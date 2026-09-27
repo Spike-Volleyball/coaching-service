@@ -12,8 +12,11 @@ public class EvaluationPlanService(
     IEvaluationPlanRepository planRepository,
     IRepository<EvaluationPlanItem> itemRepository,
     IEvaluationExerciseRepository exerciseRepository,
+    IEvaluationAccess access,
     IMapper mapper) : IEvaluationPlanService
 {
+    private const string PlanNotFound = "Evaluation plan not found";
+
     public async Task<EvaluationPlanDto> CreateAsync(CreateEvaluationPlanDto request, Guid userId)
     {
         var plan = mapper.Map<EvaluationPlan>(request);
@@ -43,17 +46,28 @@ public class EvaluationPlanService(
             await itemRepository.SaveChangesAsync();
         }
 
-        return await GetByIdAsync(plan.Id) ?? throw new Exception("Failed to retrieve created plan");
+        return await FindAsync(plan.Id) ?? throw new Exception("Failed to retrieve created plan");
     }
 
-    public async Task<EvaluationPlanDto?> GetByIdAsync(Guid id)
+    public async Task<EvaluationPlanDto> GetByIdForUserAsync(Guid id, Guid userId)
     {
         var plan = await planRepository.GetByIdWithItemsAsync(id);
-        return plan == null ? null : mapper.Map<EvaluationPlanDto>(plan);
+
+        // One answer for "you may not read this" and "there is nothing here", message and all,
+        // so a stranger holding an id cannot tell which it is.
+        if (plan == null || !await access.MayReadPlanAsync(plan, userId))
+            throw new EntityNotFoundException(PlanNotFound);
+
+        return mapper.Map<EvaluationPlanDto>(plan);
     }
 
-    public async Task<List<EvaluationPlanDto>> GetByClubIdAsync(Guid clubId)
+    public async Task<List<EvaluationPlanDto>> GetByClubIdAsync(Guid clubId, Guid userId)
     {
+        // Someone without standing sees what a club with no plans shows — the answer this
+        // service already gives for a club's drills and training plans.
+        if (!await access.MayReadClubAsync(clubId, userId))
+            return [];
+
         var plans = await planRepository.GetByClubIdAsync(clubId);
         return mapper.Map<List<EvaluationPlanDto>>(plans);
     }
@@ -68,7 +82,7 @@ public class EvaluationPlanService(
     {
         var plan = await planRepository.GetByIdAsync(id);
         if (plan == null)
-            throw new EntityNotFoundException("Evaluation plan not found");
+            throw new EntityNotFoundException(PlanNotFound);
 
         if (plan.CreatedByUserId != userId)
             throw new ForbiddenException("Only the creator can update this evaluation plan");
@@ -79,14 +93,14 @@ public class EvaluationPlanService(
         planRepository.Update(plan);
         await planRepository.SaveChangesAsync();
 
-        return await GetByIdAsync(id) ?? throw new Exception("Failed to retrieve plan");
+        return await FindAsync(id) ?? throw new Exception("Failed to retrieve plan");
     }
 
     public async Task DeleteAsync(Guid id, Guid userId)
     {
         var plan = await planRepository.GetByIdAsync(id);
         if (plan == null)
-            throw new EntityNotFoundException("Evaluation plan not found");
+            throw new EntityNotFoundException(PlanNotFound);
 
         if (plan.CreatedByUserId != userId)
             throw new ForbiddenException("Only the creator can delete this evaluation plan");
@@ -100,7 +114,7 @@ public class EvaluationPlanService(
     {
         var plan = await planRepository.GetByIdWithItemsAsync(planId);
         if (plan == null)
-            throw new EntityNotFoundException("Evaluation plan not found");
+            throw new EntityNotFoundException(PlanNotFound);
 
         if (plan.CreatedByUserId != userId)
             throw new ForbiddenException("Only the creator can modify this evaluation plan");
@@ -122,14 +136,14 @@ public class EvaluationPlanService(
         itemRepository.Add(item);
         await itemRepository.SaveChangesAsync();
 
-        return await GetByIdAsync(planId) ?? throw new Exception("Failed to retrieve plan");
+        return await FindAsync(planId) ?? throw new Exception("Failed to retrieve plan");
     }
 
     public async Task<EvaluationPlanDto> RemoveItemAsync(Guid planId, Guid itemId, Guid userId)
     {
         var plan = await planRepository.GetByIdWithItemsAsync(planId);
         if (plan == null)
-            throw new EntityNotFoundException("Evaluation plan not found");
+            throw new EntityNotFoundException(PlanNotFound);
 
         if (plan.CreatedByUserId != userId)
             throw new ForbiddenException("Only the creator can modify this evaluation plan");
@@ -142,14 +156,14 @@ public class EvaluationPlanService(
         itemRepository.Update(item);
         await itemRepository.SaveChangesAsync();
 
-        return await GetByIdAsync(planId) ?? throw new Exception("Failed to retrieve plan");
+        return await FindAsync(planId) ?? throw new Exception("Failed to retrieve plan");
     }
 
     public async Task<EvaluationPlanDto> ReorderItemsAsync(Guid planId, List<Guid> itemIds, Guid userId)
     {
         var plan = await planRepository.GetByIdWithItemsAsync(planId);
         if (plan == null)
-            throw new EntityNotFoundException("Evaluation plan not found");
+            throw new EntityNotFoundException(PlanNotFound);
 
         if (plan.CreatedByUserId != userId)
             throw new ForbiddenException("Only the creator can modify this evaluation plan");
@@ -166,6 +180,13 @@ public class EvaluationPlanService(
         }
         await itemRepository.SaveChangesAsync();
 
-        return await GetByIdAsync(planId) ?? throw new Exception("Failed to retrieve plan");
+        return await FindAsync(planId) ?? throw new Exception("Failed to retrieve plan");
+    }
+
+    /// <summary>The plan a write just touched, for its answer: the writer is its author.</summary>
+    private async Task<EvaluationPlanDto?> FindAsync(Guid id)
+    {
+        var plan = await planRepository.GetByIdWithItemsAsync(id);
+        return plan == null ? null : mapper.Map<EvaluationPlanDto>(plan);
     }
 }

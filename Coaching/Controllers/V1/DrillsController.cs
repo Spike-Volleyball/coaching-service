@@ -3,6 +3,8 @@ using Shared.DataAccess.Providers.Interfaces;
 using Asp.Versioning;
 using Coaching.Application.Interfaces.Services;
 using Coaching.Application.DTOs.Drills;
+using Coaching.Authorization;
+using Shared.Security.Access;
 
 namespace Coaching.Controllers.V1;
 
@@ -41,14 +43,10 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
     /// Get a drill by ID.
     /// </summary>
     [HttpGet("drills/{id:guid}")]
+    [Access<DrillAccess>(DrillAccess.Read, "id")]
     public async Task<IActionResult> GetById([FromRoute] Guid id)
     {
-        Guid? userId = null;
-        if (JwtPayload?.UserId != null && JwtPayload.UserId != Guid.Empty)
-            userId = JwtPayload.UserId;
-
-        var drill = await _drillService.GetByIdAsync(id, userId);
-        if (drill == null) return NotFound();
+        var drill = await _drillService.GetByIdAsync(id, JwtPayload!.UserId);
         return Ok(drill);
     }
 
@@ -78,6 +76,7 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
     /// Update a drill.
     /// </summary>
     [HttpPut("drills/{id:guid}")]
+    [Access<DrillAccess>(DrillAccess.Read, "id")]
     public async Task<IActionResult> Update([FromRoute] Guid id, [FromBody] UpdateDrillDto request)
     {
         CheckIsUserLoggedIn();
@@ -93,6 +92,7 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
     /// Delete a drill.
     /// </summary>
     [HttpDelete("drills/{id:guid}")]
+    [Access<DrillAccess>(DrillAccess.Read, "id")]
     public async Task<IActionResult> Delete([FromRoute] Guid id)
     {
         CheckIsUserLoggedIn();
@@ -131,6 +131,7 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
     /// already spliced the token into; the whole drill comes back with the dial on it.
     /// </summary>
     [HttpPost("drills/{drillId:guid}/dials")]
+    [Access<DrillAccess>(DrillAccess.Read, "drillId")]
     public async Task<IActionResult> AddDial([FromRoute] Guid drillId, [FromBody] CreateDrillDialDto request)
     {
         CheckIsUserLoggedIn();
@@ -143,6 +144,7 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
     /// bring the re-tokenized instructions with it.
     /// </summary>
     [HttpPatch("drills/{drillId:guid}/dials/{name}")]
+    [Access<DrillAccess>(DrillAccess.Read, "drillId")]
     public async Task<IActionResult> UpdateDial(
         [FromRoute] Guid drillId, [FromRoute] string name, [FromBody] UpdateDrillDialDto request)
     {
@@ -155,6 +157,7 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
     /// Remove a dial, with the instructions the client has already put its words back into.
     /// </summary>
     [HttpDelete("drills/{drillId:guid}/dials/{name}")]
+    [Access<DrillAccess>(DrillAccess.Read, "drillId")]
     public async Task<IActionResult> DeleteDial(
         [FromRoute] Guid drillId, [FromRoute] string name, [FromBody] DeleteDrillDialDto request)
     {
@@ -168,6 +171,7 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
     /// it through the dial values supplied here, and the duplicate goes.
     /// </summary>
     [HttpPost("drills/{drillId:guid}/fold")]
+    [Access<DrillAccess>(DrillAccess.Read, "drillId")]
     public async Task<IActionResult> Fold([FromRoute] Guid drillId, [FromBody] FoldDrillDto request)
     {
         CheckIsUserLoggedIn();
@@ -180,6 +184,7 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
     // =========================================================================
 
     [HttpPost("drills/{id:guid}/like")]
+    [Access<DrillAccess>(DrillAccess.Read, "id")]
     public async Task<IActionResult> LikeDrill([FromRoute] Guid id)
     {
         CheckIsUserLoggedIn();
@@ -188,6 +193,7 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
     }
 
     [HttpDelete("drills/{id:guid}/like")]
+    [Access<DrillAccess>(DrillAccess.Read, "id")]
     public async Task<IActionResult> UnlikeDrill([FromRoute] Guid id)
     {
         CheckIsUserLoggedIn();
@@ -196,6 +202,7 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
     }
 
     [HttpGet("drills/{id:guid}/like")]
+    [Access<DrillAccess>(DrillAccess.Read, "id")]
     public async Task<IActionResult> GetLikeStatus([FromRoute] Guid id)
     {
         CheckIsUserLoggedIn();
@@ -208,6 +215,7 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
     // =========================================================================
 
     [HttpPost("drills/{id:guid}/bookmark")]
+    [Access<DrillAccess>(DrillAccess.Read, "id")]
     public async Task<IActionResult> BookmarkDrill([FromRoute] Guid id)
     {
         CheckIsUserLoggedIn();
@@ -216,6 +224,7 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
     }
 
     [HttpDelete("drills/{id:guid}/bookmark")]
+    [Access<DrillAccess>(DrillAccess.Read, "id")]
     public async Task<IActionResult> UnbookmarkDrill([FromRoute] Guid id)
     {
         CheckIsUserLoggedIn();
@@ -236,6 +245,7 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
     // =========================================================================
 
     [HttpPost("drills/{id:guid}/comments")]
+    [Access<DrillAccess>(DrillAccess.Read, "id")]
     public async Task<IActionResult> CreateComment([FromRoute] Guid id, [FromBody] CreateDrillCommentDto request)
     {
         CheckIsUserLoggedIn();
@@ -244,6 +254,7 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
     }
 
     [HttpGet("drills/{id:guid}/comments")]
+    [Access<DrillAccess>(DrillAccess.Read, "id")]
     public async Task<IActionResult> GetComments(
         [FromRoute] Guid id,
         [FromQuery] Guid? cursor = null,
@@ -254,6 +265,7 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
     }
 
     [HttpDelete("drills/{id:guid}/comments/{commentId:guid}")]
+    [Access<DrillAccess>(DrillAccess.Read, "id")]
     public async Task<IActionResult> DeleteComment([FromRoute] Guid id, [FromRoute] Guid commentId)
     {
         CheckIsUserLoggedIn();
@@ -266,6 +278,7 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
     // =========================================================================
 
     [HttpPost("drills/{id:guid}/attachments/upload-url")]
+    [Access<DrillAccess>(DrillAccess.Read, "id")]
     public async Task<IActionResult> GetAttachmentUploadUrl([FromRoute] Guid id, [FromBody] DrillAttachmentUploadRequestDto request)
     {
         CheckIsUserLoggedIn();
@@ -274,6 +287,7 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
     }
 
     [HttpPost("drills/{id:guid}/attachments")]
+    [Access<DrillAccess>(DrillAccess.Read, "id")]
     public async Task<IActionResult> AddAttachment([FromRoute] Guid id, [FromBody] CreateDrillAttachmentDto request)
     {
         CheckIsUserLoggedIn();
@@ -282,6 +296,7 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
     }
 
     [HttpDelete("drills/{id:guid}/attachments/{attachmentId:guid}")]
+    [Access<DrillAccess>(DrillAccess.Read, "id")]
     public async Task<IActionResult> DeleteAttachment([FromRoute] Guid id, [FromRoute] Guid attachmentId)
     {
         CheckIsUserLoggedIn();
@@ -294,6 +309,7 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
     // =========================================================================
 
     [HttpPut("drills/{id:guid}/animations")]
+    [Access<DrillAccess>(DrillAccess.Read, "id")]
     public async Task<IActionResult> UpdateAnimations([FromRoute] Guid id, [FromBody] UpdateDrillAnimationsDto request)
     {
         CheckIsUserLoggedIn();

@@ -2,6 +2,8 @@ using AutoMapper;
 using Coaching.Application.DTOs.Feedback;
 using Coaching.Application.Interfaces.Repositories;
 using Coaching.Application.Interfaces.Services;
+using Coaching.Application.Services.Facts;
+using Coaching.Application.Validation;
 using Coaching.Domain.Models.Feedback;
 using Ganss.Xss;
 using MassTransit;
@@ -115,6 +117,11 @@ public class FeedbackService(
         if (resolvedClubId.HasValue)
             request = request with { ClubId = resolvedClubId.Value };
 
+        // Before the first save: a create saves in stages, so a late refusal would leave half a feedback.
+        LinkUrl.EnsureHttp(AttachmentLinksOf(request.Attachments)
+            .Concat((request.ImprovementPoints ?? []).SelectMany((point, i) =>
+                PointLinksOf(point.MediaLinks, $"improvementPoints[{i}]."))));
+
         var feedback = mapper.Map<Feedback>(request);
         feedback.CoachUserId = coachUserId;
 
@@ -152,6 +159,7 @@ public class FeedbackService(
         {
             var praise = mapper.Map<Praise>(request.Praise);
             praise.FeedbackId = feedback.Id;
+            feedback.Praise = praise;
             praiseRepository.Add(praise);
             await praiseRepository.SaveChangesAsync();
         }
@@ -174,6 +182,7 @@ public class FeedbackService(
             await PublishFeedbackSharedAsync(
                 feedback,
                 BuildPreview(feedback.ContentPlainText, request.Praise?.Message, request.ImprovementPoints?.Count ?? 0));
+            await PublishPraiseIfMovedAsync(feedback, PraiseFact.None);
             await feedbackRepository.SaveChangesAsync();
         }
 
@@ -198,12 +207,17 @@ public class FeedbackService(
 
     public async Task<FeedbackDto> UpdateAsync(Guid id, UpdateFeedbackDto request, Guid userId)
     {
-        var feedback = await feedbackRepository.GetByIdAsync(id);
+        var feedback = await feedbackRepository.GetByIdAsync(id, f => f.Praise!);
         if (feedback == null)
             throw new EntityNotFoundException("Feedback not found");
 
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can update this feedback");
+
+        // A kept attachment's url is never read (StageAttachmentsAsync keeps the stored one), so
+        // only the attachments this edit adds are judged.
+        LinkUrl.EnsureHttp(AttachmentLinksOf(request.Attachments)
+            .Where((_, i) => request.Attachments![i].Id is null));
 
         // Handle content update from either Content or Comment field (Phase A compat)
         var newContent = request.Content ?? request.Comment;
@@ -224,25 +238,70 @@ public class FeedbackService(
             feedback.Comment = feedback.ContentPlainText;
         }
 
+        var praiseBefore = PraiseFact.Of(feedback);
         var wasShared = feedback.SharedWithPlayer;
         if (request.SharedWithPlayer.HasValue) feedback.SharedWithPlayer = request.SharedWithPlayer.Value;
 
         feedbackRepository.Update(feedback);
 
+        if (request.Attachments != null)
+            await StageAttachmentsAsync(feedback.Id, request.Attachments);
+
         // Publishing before the save is what puts the message in the transactional outbox;
         // a Publish after the last SaveChangesAsync is silently dropped.
         if (feedback.SharedWithPlayer)
         {
-            var preview = BuildPreview(feedback.ContentPlainText, feedback.Praise?.Message, feedback.ImprovementPoints?.Count ?? 0);
+            var preview = BuildPreview(feedback.ContentPlainText, feedback.LivePraise()?.Message, feedback.ImprovementPoints?.Count ?? 0);
             if (wasShared)
                 await PublishFeedbackUpdatedAsync(feedback, preview);
             else
                 await PublishFeedbackSharedAsync(feedback, preview);
         }
 
+        await PublishPraiseIfMovedAsync(feedback, praiseBefore);
         await feedbackRepository.SaveChangesAsync();
 
         return await GetByIdAsync(id, userId) ?? throw new Exception("Failed to retrieve feedback");
+    }
+
+    /// <summary>
+    /// Brings the feedback's own attachments to the list an edit sends, staged for the caller's
+    /// single save so the note, the share flag and the attachments land together or not at all.
+    /// </summary>
+    private async Task StageAttachmentsAsync(Guid feedbackId, IReadOnlyList<UpdateFeedbackMediaDto> attachments)
+    {
+        var current = await feedbackMediaRepository.Query()
+            .Where(m => m.FeedbackId == feedbackId && !m.IsDeleted)
+            .ToDictionaryAsync(m => m.Id);
+
+        if (attachments.Any(a => a.Id is { } id && !current.ContainsKey(id)))
+            throw new EntityNotFoundException("Attachment not found");
+
+        var keptIds = attachments.Where(a => a.Id.HasValue).Select(a => a.Id!.Value).ToHashSet();
+        foreach (var removed in current.Values.Where(m => !keptIds.Contains(m.Id)))
+            removed.IsDeleted = true;
+
+        // A kept row keeps its stored Url whatever the entry says: reads hand out presigned URLs.
+        // A new row maps like a created one, so a presigned URL is stored bare there too.
+        // New rows go through Add, not through the tracked parent's collection — BaseEntity sets
+        // every Id at construction, and a keyed child found only by navigation saves as an UPDATE.
+        for (var order = 0; order < attachments.Count; order++)
+        {
+            var entry = attachments[order];
+            if (entry.Id is { } id)
+            {
+                var kept = current[id];
+                kept.Title = entry.Title;
+                kept.Type = entry.Type;
+                kept.Order = order;
+                continue;
+            }
+
+            var added = mapper.Map<CreateFeedbackMediaDto, FeedbackMedia>(entry);
+            added.FeedbackId = feedbackId;
+            added.Order = order;
+            feedbackMediaRepository.Add(added);
+        }
     }
 
     public async Task DeleteAsync(Guid id, Guid userId)
@@ -254,8 +313,11 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can delete this feedback");
 
+        // A withdrawn snapshot carries no badge, so taking the feedback back needs no praise loaded.
+        var praiseBefore = PraiseFact.Of(feedback);
         feedback.IsDeleted = true;
         feedbackRepository.Update(feedback);
+        await PublishPraiseIfMovedAsync(feedback, praiseBefore);
         await feedbackRepository.SaveChangesAsync();
     }
 
@@ -317,6 +379,7 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can share this feedback");
 
+        var praiseBefore = PraiseFact.Of(feedback);
         var wasShared = feedback.SharedWithPlayer;
         feedback.SharedWithPlayer = share;
         feedbackRepository.Update(feedback);
@@ -326,9 +389,10 @@ public class FeedbackService(
         {
             await PublishFeedbackSharedAsync(
                 feedback,
-                BuildPreview(feedback.ContentPlainText, feedback.Praise?.Message, feedback.ImprovementPoints.Count));
+                BuildPreview(feedback.ContentPlainText, feedback.LivePraise()?.Message, feedback.ImprovementPoints.Count));
         }
 
+        await PublishPraiseIfMovedAsync(feedback, praiseBefore);
         await feedbackRepository.SaveChangesAsync();
 
         return await GetByIdAsync(id, userId) ?? throw new Exception("Failed to retrieve feedback");
@@ -363,6 +427,8 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
+        LinkUrl.EnsureHttp(PointLinksOf(request.MediaLinks));
+
         var maxOrder = feedback.ImprovementPoints.Any() ? feedback.ImprovementPoints.Max(p => p.Order) : 0;
         var order = request.Order ?? maxOrder + 1;
 
@@ -385,9 +451,7 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
-        var point = await pointRepository.GetByIdAsync(pointId);
-        if (point == null || point.FeedbackId != feedbackId)
-            throw new EntityNotFoundException("Improvement point not found");
+        var point = await PointOnFeedbackAsync(feedbackId, pointId);
 
         if (request.Description != null) point.Description = request.Description;
 
@@ -406,9 +470,7 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
-        var point = await pointRepository.GetByIdAsync(pointId);
-        if (point == null || point.FeedbackId != feedbackId)
-            throw new EntityNotFoundException("Improvement point not found");
+        var point = await PointOnFeedbackAsync(feedbackId, pointId);
 
         point.IsDeleted = true;
         pointRepository.Update(point);
@@ -425,6 +487,8 @@ public class FeedbackService(
 
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
+
+        await PointOnFeedbackAsync(feedbackId, pointId);
 
         // Validate drill exists locally (both in coaching-service now)
         var drill = await drillRepository.GetByIdAsync(drillId);
@@ -465,6 +529,8 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
+        await PointOnFeedbackAsync(feedbackId, pointId);
+
         var link = await drillLinkRepository.Query()
             .FirstOrDefaultAsync(l => l.ImprovementPointId == pointId && l.DrillId == drillId);
 
@@ -487,6 +553,9 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
+        await PointOnFeedbackAsync(feedbackId, pointId);
+        LinkUrl.EnsureHttp([("url", request.Url)]);
+
         var media = mapper.Map<ImprovementPointMedia>(request);
         media.ImprovementPointId = pointId;
 
@@ -504,6 +573,8 @@ public class FeedbackService(
 
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
+
+        await PointOnFeedbackAsync(feedbackId, pointId);
 
         var media = await mediaRepository.GetByIdAsync(mediaId);
         if (media == null || media.ImprovementPointId != pointId)
@@ -525,13 +596,29 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
-        if (feedback.Praise != null)
+        if (feedback.LivePraise() != null)
             throw new ConflictException("Feedback already has praise. Update or remove it first.");
 
-        var praise = mapper.Map<Praise>(request);
-        praise.FeedbackId = feedbackId;
+        var praiseBefore = PraiseFact.Of(feedback);
 
-        praiseRepository.Add(praise);
+        // A feedback has one praise row, unique by feedback, and removal only marks it deleted:
+        // praise given again revives that row.
+        if (feedback.Praise is { } removed)
+        {
+            removed.IsDeleted = false;
+            removed.Message = request.Message;
+            removed.BadgeType = request.BadgeType;
+            praiseRepository.Update(removed);
+        }
+        else
+        {
+            var praise = mapper.Map<Praise>(request);
+            praise.FeedbackId = feedbackId;
+            feedback.Praise = praise;
+            praiseRepository.Add(praise);
+        }
+
+        await PublishPraiseIfMovedAsync(feedback, praiseBefore);
         await praiseRepository.SaveChangesAsync();
 
         return await GetByIdAsync(feedbackId, userId) ?? throw new Exception("Failed to retrieve feedback");
@@ -546,13 +633,15 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
-        if (feedback.Praise == null)
+        if (feedback.LivePraise() is not { } praise)
             throw new EntityNotFoundException("Feedback has no praise");
 
-        if (request.Message != null) feedback.Praise.Message = request.Message;
-        if (request.BadgeType.HasValue) feedback.Praise.BadgeType = request.BadgeType;
+        var praiseBefore = PraiseFact.Of(feedback);
+        if (request.Message != null) praise.Message = request.Message;
+        if (request.BadgeType.HasValue) praise.BadgeType = request.BadgeType;
 
-        praiseRepository.Update(feedback.Praise);
+        praiseRepository.Update(praise);
+        await PublishPraiseIfMovedAsync(feedback, praiseBefore);
         await praiseRepository.SaveChangesAsync();
 
         return await GetByIdAsync(feedbackId, userId) ?? throw new Exception("Failed to retrieve feedback");
@@ -567,10 +656,12 @@ public class FeedbackService(
         if (feedback.CoachUserId != userId)
             throw new ForbiddenException("Only the coach can modify this feedback");
 
-        if (feedback.Praise != null)
+        if (feedback.LivePraise() is { } praise)
         {
-            feedback.Praise.IsDeleted = true;
-            praiseRepository.Update(feedback.Praise);
+            var praiseBefore = PraiseFact.Of(feedback);
+            praise.IsDeleted = true;
+            praiseRepository.Update(praise);
+            await PublishPraiseIfMovedAsync(feedback, praiseBefore);
             await praiseRepository.SaveChangesAsync();
         }
 
@@ -611,6 +702,27 @@ public class FeedbackService(
             await mediaRepository.SaveChangesAsync();
         }
     }
+
+    /// <summary>
+    /// The point a request names, which must be a live one on the feedback it names: the caller was
+    /// authorized against that feedback, so a point from another would be changed on its authority.
+    /// </summary>
+    private async Task<ImprovementPoint> PointOnFeedbackAsync(Guid feedbackId, Guid pointId)
+    {
+        var point = await pointRepository.GetByIdAsync(pointId);
+        if (point == null || point.IsDeleted || point.FeedbackId != feedbackId)
+            throw new EntityNotFoundException("Improvement point not found");
+        return point;
+    }
+
+    /// <summary>A feedback's own attachments, each named as the request carries it.</summary>
+    private static IEnumerable<(string Field, string? Url)> AttachmentLinksOf(IEnumerable<CreateFeedbackMediaDto>? attachments) =>
+        (attachments ?? []).Select((media, i) => ($"attachments[{i}].url", (string?)media.Url));
+
+    /// <summary>One point's media, named under the point when the request nests it in one.</summary>
+    private static IEnumerable<(string Field, string? Url)> PointLinksOf(
+        IEnumerable<CreateImprovementPointMediaDto>? mediaLinks, string prefix = "") =>
+        (mediaLinks ?? []).Select((media, i) => ($"{prefix}mediaLinks[{i}].url", (string?)media.Url));
 
     private async Task EnrichWithProfilesAsync(IEnumerable<FeedbackDto> feedbacks)
     {
@@ -701,6 +813,19 @@ public class FeedbackService(
             CoachName = await ResolveCoachNameAsync(feedback.CoachUserId),
             Preview = preview,
         });
+    }
+
+    /// <summary>
+    /// Publishes the feedback's praise snapshot when a change moved what the player holds from it:
+    /// shared or taken back, or its badge put on, changed or taken off. Never gated on who is
+    /// notified, and called before the save, which is what writes a publish to the outbox.
+    /// </summary>
+    private Task PublishPraiseIfMovedAsync(Feedback feedback, PraiseFact before)
+    {
+        var after = PraiseFact.Of(feedback);
+        return after == before
+            ? Task.CompletedTask
+            : publishEndpoint.Publish(after.Snapshot(feedback, timeProvider.GetUtcNow().UtcDateTime));
     }
 
     private async Task<string> ResolveCoachNameAsync(Guid coachUserId)

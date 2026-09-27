@@ -1,6 +1,7 @@
 ﻿using Coaching.Application.Interfaces.Services;
 using Coaching.Application.Mappings;
 using Coaching.Application.Services;
+using Coaching.Application.Services.Facts;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Coaching.Application.Extensions;
@@ -31,6 +32,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITacticsBoardService, TacticsBoardService>();
 
         // Evaluation services
+        services.AddScoped<IEvaluationAccess, EvaluationAccess>();
+        services.AddScoped<IEvaluationPeople, EvaluationPeople>();
         services.AddScoped<IEvaluationExerciseService, EvaluationExerciseService>();
         services.AddScoped<IEvaluationPlanService, EvaluationPlanService>();
         services.AddScoped<IEvaluationSessionService, EvaluationSessionService>();
@@ -45,8 +48,10 @@ public static class ServiceCollectionExtensions
         // Feedback services
         services.AddScoped<IFeedbackService, FeedbackService>();
         services.AddScoped<IFeedbackAuthorizationService, FeedbackAuthorizationService>();
+        services.AddSingleton<FeedbackScopeFlights>();
         services.AddScoped<IBadgeService, BadgeService>();
         services.AddScoped<IFeedbackMediaUrlSigner, FeedbackMediaUrlSigner>();
+        services.AddScoped<IFactRepublisher, FactRepublisher>();
         return services;
     }
 }

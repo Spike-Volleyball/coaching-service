@@ -18,7 +18,22 @@ namespace Coaching.Tests.Integration.Fixtures;
 public class CoachingApiFactory : WebApplicationFactory<Program>
 {
     private readonly PostgresFixture _postgresFixture = new();
+    private readonly bool _isolateMessageBroker;
     public DatabaseResetter DatabaseResetter { get; private set; } = null!;
+    public string ConnectionString => _postgresFixture.ConnectionString;
+
+    /// <param name="isolateMessageBroker">
+    /// When true, the bus and its EF outbox stay real and RabbitMQ is pointed at a closed local
+    /// port, so what a request publishes lands in the outbox table and stays there. For tests that
+    /// read the outbox: with a broker reachable (docker-compose's, in local dev) the delivery service
+    /// takes rows within a second and races the assertions. The bus retries in the background, so
+    /// startup and requests are unaffected. By default the publish endpoint is a substitute and the
+    /// bus never starts.
+    /// </param>
+    public CoachingApiFactory(bool isolateMessageBroker = false)
+    {
+        _isolateMessageBroker = isolateMessageBroker;
+    }
 
     public const string JwtSecret = "314b7dfbe6cf5a56208d194297589c4bb12e07410c88c576044bddc4da82f884";
     public const string JwtIssuer = "AuthService";
@@ -67,6 +82,17 @@ public class CoachingApiFactory : WebApplicationFactory<Program>
                 ["S3:PresignedUrlExpiryMinutes"] = "15",
             }));
 
+        if (_isolateMessageBroker)
+        {
+            // Port 1 is privileged and unbound, so the client is refused at once instead of stalling.
+            builder.ConfigureAppConfiguration(config =>
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["RabbitMQ:Host"] = "localhost",
+                    ["RabbitMQ:Port"] = "1",
+                }));
+        }
+
         builder.ConfigureServices(services =>
         {
             var dbDescriptor = services.SingleOrDefault(d =>
@@ -84,19 +110,22 @@ public class CoachingApiFactory : WebApplicationFactory<Program>
             ReplaceWithSingleton(services, GuardianCacheService);
             ReplaceWithSingleton(services, GuardianAccessSource);
 
-            // Remove MassTransit hosted services to prevent RabbitMQ connection attempts.
-            var massTransitHosted = services.Where(d =>
-                d.ServiceType == typeof(IHostedService) &&
-                (d.ImplementationType?.FullName?.Contains("MassTransit") == true ||
-                 d.ImplementationFactory?.Method.DeclaringType?.FullName?.Contains("MassTransit") == true))
-                .ToList();
-            foreach (var d in massTransitHosted)
-                services.Remove(d);
+            if (!_isolateMessageBroker)
+            {
+                // Remove MassTransit hosted services to prevent RabbitMQ connection attempts.
+                var massTransitHosted = services.Where(d =>
+                    d.ServiceType == typeof(IHostedService) &&
+                    (d.ImplementationType?.FullName?.Contains("MassTransit") == true ||
+                     d.ImplementationFactory?.Method.DeclaringType?.FullName?.Contains("MassTransit") == true))
+                    .ToList();
+                foreach (var d in massTransitHosted)
+                    services.Remove(d);
 
-            var publishEndpoints = services.Where(d => d.ServiceType == typeof(IPublishEndpoint)).ToList();
-            foreach (var d in publishEndpoints)
-                services.Remove(d);
-            services.AddSingleton(Substitute.For<IPublishEndpoint>());
+                var publishEndpoints = services.Where(d => d.ServiceType == typeof(IPublishEndpoint)).ToList();
+                foreach (var d in publishEndpoints)
+                    services.Remove(d);
+                services.AddSingleton(Substitute.For<IPublishEndpoint>());
+            }
 
             var cacheDescriptors = services.Where(d => d.ServiceType == typeof(IDistributedCache)).ToList();
             foreach (var d in cacheDescriptors)

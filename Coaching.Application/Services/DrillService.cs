@@ -5,6 +5,7 @@ using Coaching.Application.DTOs.Drills;
 using Coaching.Application.Interfaces.Repositories;
 using Coaching.Application.Interfaces.Services;
 using Coaching.Application.RichText;
+using Coaching.Application.Validation;
 using Coaching.Domain.Enums;
 using Coaching.Domain.Models.Drills;
 using Microsoft.EntityFrameworkCore;
@@ -98,7 +99,7 @@ public class DrillService : IDrillService
         var sortBy = filter.SortBy?.ToLower() ?? "likecount";
         var sortOrder = filter.SortOrder?.ToLower() ?? "desc";
 
-        query = sortBy switch
+        var sorted = sortBy switch
         {
             "name" => sortOrder == "desc" ? query.OrderByDescending(d => d.Name) : query.OrderBy(d => d.Name),
             "createdat" => sortOrder == "desc" ? query.OrderByDescending(d => d.CreatedAt) : query.OrderBy(d => d.CreatedAt),
@@ -106,15 +107,17 @@ public class DrillService : IDrillService
             _ => sortOrder == "desc" ? query.OrderByDescending(d => d.LikeCount) : query.OrderBy(d => d.LikeCount)
         };
 
-        // Apply pagination
+        // Apply pagination. Every split statement below re-applies the order beneath Skip/Take,
+        // so it must be unique or the statements can pick different drills at a page's edge.
         var skip = (filter.Page - 1) * filter.Limit;
-        query = query.Skip(skip).Take(filter.Limit);
+        query = sorted.ThenBy(d => d.Id).Skip(skip).Take(filter.Limit);
 
         var drills = await query
             .Include(d => d.Attachments.OrderBy(a => a.Order))
             .Include(d => d.Equipment.OrderBy(e => e.Order))
             .Include(d => d.Dials.OrderBy(dial => dial.Order))
             .Include(d => d.Creator)
+            .AsSplitQuery()
             .ToListAsync();
 
         var dtos = _mapper.Map<IEnumerable<DrillDto>>(drills);
@@ -123,26 +126,12 @@ public class DrillService : IDrillService
         return PagedResponse<DrillDto>.Create(dtos, totalCount, filter.Page, filter.Limit);
     }
 
-    public async Task<DrillDto?> GetByIdAsync(Guid id, Guid? userId = null)
+    public async Task<DrillDto> GetByIdAsync(Guid id, Guid userId)
     {
+        // A drill this reader may not see answers exactly as a missing one does.
         var drill = await _drillRepository.GetByIdWithDetailsAsync(id);
-        if (drill == null) return null;
-
-        // Check visibility
-        if (drill.Visibility == DrillVisibility.Private)
-        {
-            if (!userId.HasValue)
-                throw new ForbiddenException("This drill is private");
-
-            var canRead = drill.CreatedByUserId == userId.Value;
-            if (!canRead && drill.ClubId.HasValue)
-                canRead = await _clubsClient.IsUserClubMemberAsync(userId.Value, drill.ClubId.Value);
-
-            if (!canRead)
-            {
-                throw new ForbiddenException("This drill is private");
-            }
-        }
+        if (drill == null || !await IsReadableAsync(drill, userId))
+            throw new EntityNotFoundException("Drill not found");
 
         var dto = _mapper.Map<DrillDto>(drill);
         await EnrichWithClubInfoAsync([dto]);
@@ -150,10 +139,20 @@ public class DrillService : IDrillService
         return dto;
     }
 
+    public async Task<bool> CanReadAsync(Guid id, Guid userId) =>
+        await _drillRepository.GetByIdAsync(id) is { } drill && await IsReadableAsync(drill, userId);
+
+    private async Task<bool> IsReadableAsync(Drill drill, Guid userId) =>
+        drill.Visibility == DrillVisibility.Public
+        || drill.CreatedByUserId == userId
+        || (drill.ClubId is { } clubId && await _clubsClient.IsUserClubMemberAsync(userId, clubId));
+
     public async Task<DrillDto> CreateAsync(CreateDrillDto request, Guid userId)
     {
         if (string.IsNullOrWhiteSpace(request.Name))
             throw new BadRequestException("Name is required", ErrorCodeEnum.ValidationError);
+
+        EnsureVideoUrlIsHttp(request.VideoUrl);
 
         if (request.ClubId.HasValue)
             await EnsureCanManageClubDrillsAsync(request.ClubId.Value, userId);
@@ -324,6 +323,9 @@ public class DrillService : IDrillService
         if (row.VideoUrl?.Length > Drill.VideoUrlMaxLength)
             return $"Video link is longer than {Drill.VideoUrlMaxLength} characters";
 
+        if (!string.IsNullOrWhiteSpace(row.VideoUrl) && !LinkUrl.IsHttp(row.VideoUrl))
+            return "Video link must start with http:// or https://";
+
         if (row.Equipment?.Any(item => item.Name?.Length > DrillEquipment.NameMaxLength) == true)
             return $"Equipment name is longer than {DrillEquipment.NameMaxLength} characters";
 
@@ -391,6 +393,8 @@ public class DrillService : IDrillService
 
         if (string.IsNullOrWhiteSpace(request.Name))
             throw new BadRequestException("Name is required", ErrorCodeEnum.ValidationError);
+
+        EnsureVideoUrlIsHttp(request.VideoUrl);
 
         // Updating a club drill affects the current club even when the request moves it out.
         // A move to another club affects both clubs, so authorization is required in each.
@@ -551,6 +555,13 @@ public class DrillService : IDrillService
 
     private Task EnsureCanManageClubDrillsAsync(Guid clubId, Guid userId) =>
         DrillEditRules.EnsureCanManageClubDrillsAsync(clubId, userId, _clubsClient);
+
+    /// <summary>A drill needs no video, so a missing or blank one is not judged.</summary>
+    private static void EnsureVideoUrlIsHttp(string? videoUrl)
+    {
+        if (!string.IsNullOrWhiteSpace(videoUrl))
+            LinkUrl.EnsureHttp([("videoUrl", videoUrl)]);
+    }
 
     // =========================================================================
     // LIKES
@@ -811,6 +822,9 @@ public class DrillService : IDrillService
 
         if (!CanModifyDrill(drill, userId))
             throw new ForbiddenException("Only the creator can add attachments");
+
+        // An uploaded file's url and a pasted link both arrive here.
+        LinkUrl.EnsureHttp([("fileUrl", request.FileUrl)]);
 
         var maxOrder = await _attachmentRepository.GetMaxOrderForDrillAsync(drillId);
 

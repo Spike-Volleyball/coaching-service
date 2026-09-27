@@ -28,4 +28,7 @@ public class EvaluationGroupRepository : BaseRepository<EvaluationGroup>, IEvalu
             .Include(g => g.Players.Where(p => !p.IsDeleted))
             .FirstOrDefaultAsync();
     }
+
+    public Task<bool> IsEvaluatorAsync(Guid sessionId, Guid userId) =>
+        _dbSet.AnyAsync(g => g.SessionId == sessionId && g.EvaluatorUserId == userId && !g.IsDeleted);
 }
