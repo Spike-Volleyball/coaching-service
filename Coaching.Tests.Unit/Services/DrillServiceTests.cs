@@ -29,6 +29,7 @@ public class DrillServiceTests
     private IDrillBookmarkRepository _bookmarkRepository = null!;
     private IClubsGrpcClient _clubsClient = null!;
     private IMapper _mapper = null!;
+    private IDrillReadGrants _readGrants = null!;
     private DrillService _sut = null!;
 
     private static readonly Guid UserId = Guid.NewGuid();
@@ -43,6 +44,7 @@ public class DrillServiceTests
         _bookmarkRepository = Substitute.For<IDrillBookmarkRepository>();
         _clubsClient = Substitute.For<IClubsGrpcClient>();
         _mapper = Substitute.For<IMapper>();
+        _readGrants = Substitute.For<IDrillReadGrants>();
 
         _bookmarkRepository.GetBookmarkCountsAsync(Arg.Any<IEnumerable<Guid>>()).Returns(new Dictionary<Guid, int>());
         _likeRepository.GetUserLikedDrillIdsAsync(Arg.Any<Guid>(), Arg.Any<IEnumerable<Guid>>()).Returns([]);
@@ -77,7 +79,8 @@ public class DrillServiceTests
             _mapper,
             Substitute.For<ILogger<DrillService>>(),
             Substitute.For<IDrillDialReconciler>(),
-            Substitute.For<IAnalyticsCapture>());
+            Substitute.For<IAnalyticsCapture>(),
+            _readGrants);
     }
 
     private static Drill BuildDrill(
@@ -125,6 +128,69 @@ public class DrillServiceTests
 
         // Assert
         await act.Should().ThrowAsync<Shared.Exceptions.EntityNotFoundException>();
+    }
+
+    [Test]
+    public async Task GetByIdAsync_DrillTheReaderCannotOpenOnItsOwn_OpensWhereTheirContextHoldsIt()
+    {
+        // Arrange — a co-coach opening the head coach's private drill from the event's plan.
+        var drill = BuildDrill();
+        var context = new DrillReadContext(Guid.NewGuid(), null);
+        _drillRepository.GetByIdWithDetailsAsync(drill.Id).Returns(drill);
+        _readGrants.GrantsAsync(drill.Id, UserId, context).Returns(true);
+
+        // Act
+        var result = await _sut.GetByIdAsync(drill.Id, UserId, context);
+
+        // Assert
+        result.Id.Should().Be(drill.Id);
+    }
+
+    [Test]
+    public async Task GetByIdAsync_WhenTheContextDoesNotHoldIt_GivesTheNotFoundAMissingDrillGives()
+    {
+        // Arrange
+        var drill = BuildDrill();
+        var context = new DrillReadContext(null, Guid.NewGuid());
+        _drillRepository.GetByIdWithDetailsAsync(drill.Id).Returns(drill);
+        _readGrants.GrantsAsync(drill.Id, UserId, context).Returns(false);
+
+        // Act
+        var act = () => _sut.GetByIdAsync(drill.Id, UserId, context);
+
+        // Assert
+        (await act.Should().ThrowAsync<Shared.Exceptions.EntityNotFoundException>()).Which.Message
+            .Should().Be((await MissingDrillRefusalAsync()).Message);
+    }
+
+    [Test]
+    public async Task GetByIdAsync_DrillTheReaderMayOpen_NeverAsksTheContext()
+    {
+        // Arrange
+        var drill = BuildDrill(visibility: DrillVisibility.Public);
+        _drillRepository.GetByIdWithDetailsAsync(drill.Id).Returns(drill);
+
+        // Act
+        await _sut.GetByIdAsync(drill.Id, UserId, new DrillReadContext(Guid.NewGuid(), Guid.NewGuid()));
+
+        // Assert
+        await _readGrants.DidNotReceiveWithAnyArgs().GrantsAsync(default, default, default!);
+    }
+
+    [Test]
+    public async Task GetByIdAsync_MissingDrill_NeverAsksTheContext()
+    {
+        // Act
+        await MissingDrillRefusalAsync();
+
+        // Assert
+        await _readGrants.DidNotReceiveWithAnyArgs().GrantsAsync(default, default, default!);
+    }
+
+    private async Task<Exception> MissingDrillRefusalAsync()
+    {
+        var act = () => _sut.GetByIdAsync(Guid.NewGuid(), UserId, new DrillReadContext(Guid.NewGuid(), null));
+        return (await act.Should().ThrowAsync<Shared.Exceptions.EntityNotFoundException>()).Which;
     }
 
     [Test]

@@ -51,7 +51,8 @@ public class DrillImportServiceTests
             Substitute.For<IMapper>(),
             Substitute.For<ILogger<DrillService>>(),
             Substitute.For<IDrillDialReconciler>(),
-            Substitute.For<IAnalyticsCapture>());
+            Substitute.For<IAnalyticsCapture>(),
+            Substitute.For<IDrillReadGrants>());
     }
 
     [Test]
