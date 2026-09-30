@@ -52,6 +52,46 @@ public class DrillRichTextTests
     }
 
     [Test]
+    public void ToLines_GivesANestedItemItsOwnLine_AndLeavesItOutOfItsParents()
+    {
+        // SPI-6499: the parent's text used to carry its children's glued on, and each child then
+        // came a second time.
+        const string html = "<ul><li><p>Parent:</p><ul><li><p>Child</p></li></ul></li></ul>";
+
+        DrillRichText.ToLines(html).Should().Equal("Parent:", "Child");
+    }
+
+    [Test]
+    public void ToLines_ReadsAHeadingOverItsPointsInsideNumberedSteps()
+    {
+        const string html =
+            "<ol><li><p>Split into 2 teams</p></li>" +
+            "<li><p>Variations:</p><ul><li><p>Line</p></li><li><p>Sharp cross</p></li></ul></li></ol>";
+
+        DrillRichText.ToLines(html).Should().Equal("Split into 2 teams", "Variations:", "Line", "Sharp cross");
+    }
+
+    [Test]
+    public void ToLines_KeepsTheFormattedWordsOfAnItemThatHasASubList()
+    {
+        const string html = "<ul><li><p>Serve <strong>deep</strong> first:</p><ol><li><p>Zone one</p></li></ol></li></ul>";
+
+        DrillRichText.ToLines(html).Should().Equal("Serve deep first:", "Zone one");
+    }
+
+    [Test]
+    public void Resolve_StoresTheLinesOfANestedListOnceEach()
+    {
+        // The drill "Sheet Defense" as the web editor saved it on 2026-09-24.
+        const string html =
+            "<ul><li><p>Variations:</p><ul><li><p>have coaches or players hold the sheet</p></li></ul></li></ul>";
+
+        var (_, lines) = DrillRichText.Resolve(html, null, ordered: true);
+
+        lines.Should().Equal("Variations:", "have coaches or players hold the sheet");
+    }
+
+    [Test]
     public void ToLines_SkipsBlankBlocks()
     {
         DrillRichText.ToLines("<ol><li><p>Kept</p></li><li><p>  </p></li></ol>").Should().Equal("Kept");

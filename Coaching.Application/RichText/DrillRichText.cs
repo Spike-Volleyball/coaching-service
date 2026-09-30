@@ -1,3 +1,4 @@
+using AngleSharp.Dom;
 using AngleSharp.Html.Parser;
 using Ganss.Xss;
 
@@ -55,11 +56,22 @@ public static class DrillRichText
             .QuerySelectorAll("li, p")
             // A list item's own paragraph would otherwise produce the line twice.
             .Where(element => element.TagName == "LI" || element.Closest("li") is null)
-            .Select(element => Collapse(element.TextContent))
+            .Select(element => Collapse(OwnText(element)))
             .Where(line => line.Length > 0)
             .Take(MaxLines)
             .ToArray();
     }
+
+    /// <summary>
+    /// A list item's words without its sub-list's: each nested item is a line of its own, so its
+    /// text on the parent's line as well would glue the two together and say the child twice.
+    /// </summary>
+    private static string OwnText(IElement element) =>
+        element.TagName == "LI"
+            ? string.Concat(element.ChildNodes
+                .Where(child => child is not IElement { TagName: "UL" or "OL" })
+                .Select(child => child.TextContent))
+            : element.TextContent;
 
     /// <summary>
     /// The single write funnel. HTML is the source of truth when the client sends it; otherwise
