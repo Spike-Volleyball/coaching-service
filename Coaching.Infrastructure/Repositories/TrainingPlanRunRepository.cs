@@ -1,4 +1,5 @@
 using Coaching.Application.Interfaces.Repositories;
+using Coaching.Domain.Enums;
 using Coaching.Domain.Models.Templates;
 using Coaching.Infrastructure.Data.Context;
 using Microsoft.EntityFrameworkCore;
@@ -15,6 +16,23 @@ public class TrainingPlanRunRepository : BaseRepository<TrainingPlanRun>, ITrain
 
     public Task<TrainingPlanRun?> GetByEventIdWithDetailsNoTrackingAsync(Guid eventId) =>
         WithDetails(_dbSet.AsNoTracking()).FirstOrDefaultAsync(r => r.EventId == eventId && !r.IsDeleted);
+
+    public Task<TrainingPlanRun?> GetWithDetailsAsync(Guid runId) =>
+        WithDetails(_dbSet).FirstOrDefaultAsync(r => r.Id == runId && !r.IsDeleted);
+
+    // The step after is by Order, where the run takes it by position: two steps sharing an Order
+    // can only make a due run wait for a read or a control to move it, never make the sweep read
+    // one it cannot move.
+    public Task<List<Guid>> GetIdsDueToAutoAdvanceAsync(DateTime now, CancellationToken cancellationToken) =>
+        _dbSet.AsNoTracking()
+            .Where(r => r.Status == RunStatus.Running && r.AutoAdvance && !r.IsDeleted && r.CurrentItemStartedAtUtc != null)
+            .Where(r => r.Items.Any(current =>
+                current.PlanItemId == r.CurrentItemId
+                && current.PlannedDurationSeconds > 0
+                && r.CurrentItemStartedAtUtc!.Value.AddSeconds(current.PlannedDurationSeconds) <= now
+                && r.Items.Any(next => next.Order > current.Order)))
+            .Select(r => r.Id)
+            .ToListAsync(cancellationToken);
 
     private static IQueryable<TrainingPlanRun> WithDetails(IQueryable<TrainingPlanRun> runs) =>
         runs

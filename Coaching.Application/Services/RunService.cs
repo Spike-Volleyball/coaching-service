@@ -410,6 +410,35 @@ public class RunService : IRunService
         return await CommitAsync(eventId, run, [.. movedOn, .. RunAutoAdvance.Arm(run, Now())]);
     }
 
+    public async Task<IReadOnlyList<Guid>> GetRunIdsDueToAutoAdvanceAsync(CancellationToken cancellationToken) =>
+        await _runRepository.GetIdsDueToAutoAdvanceAsync(Now(), cancellationToken);
+
+    public async Task AutoAdvanceAsync(Guid runId)
+    {
+        var run = await _runRepository.GetWithDetailsAsync(runId);
+        if (run == null)
+            return;
+
+        // Due when the sweep asked, but a coach may have paused it, switched it off or moved it on since.
+        var movedOn = RunAutoAdvance.CatchUp(run, Now());
+        if (movedOn.Count == 0)
+            return;
+
+        try
+        {
+            await _runRepository.SaveChangesAsync();
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // A coach's write landed between the read and this one, and it stands: it saved the run
+            // caught up as of its own tap. The next sweep reads the run again.
+            return;
+        }
+
+        CaptureMovedOn(run, movedOn);
+        await _broadcaster.BroadcastRunUpdatedAsync(run.EventId, MapToDto(run, canControl: true));
+    }
+
     /// <summary>A move to the neighbouring step either way, or past it, by position in the run.</summary>
     private static string Direction(int from, int to) => (to - from) switch
     {

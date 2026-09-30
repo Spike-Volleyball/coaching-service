@@ -68,4 +68,17 @@ public interface IRunService
     /// already up, the run moves on now.
     /// </summary>
     Task<RunDto> SetAutoAdvanceAsync(Guid eventId, bool enabled, Guid requestingUserId);
+
+    // The auto-advance sweep's two halves, for runs nobody is reading. No caller, so no rule:
+    // what moves is only what the run's own setting says.
+
+    /// <summary>The runs whose step's time is up now, on a run set to move on by itself.</summary>
+    Task<IReadOnlyList<Guid>> GetRunIdsDueToAutoAdvanceAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Moves the run on past every step whose time ran out, saves it and tells both rooms. A run no
+    /// longer due is left alone, and so is one a coach wrote since it was read: that write stands,
+    /// and the next sweep reads the run again.
+    /// </summary>
+    Task AutoAdvanceAsync(Guid runId);
 }

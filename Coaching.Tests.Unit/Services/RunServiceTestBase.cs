@@ -156,4 +156,8 @@ public abstract class RunServiceTestBase : UnitTestBase
 
     protected void StubNoRun() =>
         _runRepository.GetByEventIdWithDetailsAsync(EventId).Returns((TrainingPlanRun?)null);
+
+    /// <summary>The run as the auto-advance sweep loads it, by its own id.</summary>
+    protected void StubRunById(TrainingPlanRun run) =>
+        _runRepository.GetWithDetailsAsync(run.Id).Returns(run);
 }

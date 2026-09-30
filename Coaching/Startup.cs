@@ -22,6 +22,7 @@ using Shared.Middleware;
 using Shared.Extensions;
 using Shared.Microservices.Extensions;
 using Coaching.Authorization;
+using Coaching.BackgroundServices;
 using Shared.Security.Access;
 using Shared.Security.Authentication;
 using Shared.Security.Authorization;
@@ -153,6 +154,11 @@ namespace Coaching
             services.AddApplicationServices();
             services.AddSingleton(TimeProvider.System);
             services.AddScoped<Coaching.Application.Interfaces.Services.IRunBroadcaster, Coaching.Hubs.SignalRRunBroadcaster>();
+            services.AddOptions<RunAutoAdvanceOptions>()
+                .BindConfiguration(RunAutoAdvanceOptions.SectionName)
+                .Validate(o => o.IntervalSeconds > 0, "RunAutoAdvance:IntervalSeconds must be positive")
+                .ValidateOnStart();
+            services.AddHostedService<RunAutoAdvanceService>();
 
             services.AddSharedDataAccess();
 
