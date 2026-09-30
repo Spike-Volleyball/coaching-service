@@ -53,6 +53,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IBadgeService, BadgeService>();
         services.AddScoped<IFeedbackMediaUrlSigner, FeedbackMediaUrlSigner>();
         services.AddScoped<IFactRepublisher, FactRepublisher>();
+        services.AddScoped<IImportedProseRebuilder, ImportedProseRebuilder>();
         return services;
     }
 }
