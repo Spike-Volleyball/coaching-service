@@ -122,6 +122,7 @@ public class RunService : IRunService
         if (run is { Status: RunStatus.Running or RunStatus.Paused } && !restart)
             throw new ConflictException("This session is already running. Start it over to begin again from the first step.");
 
+        var isRestart = run != null;
         var now = Now();
         var orderedItems = plan.Items.OrderBy(i => i.Order).ToList();
         var firstItem = orderedItems.FirstOrDefault();
@@ -214,7 +215,8 @@ public class RunService : IRunService
             {
                 ["event_id"] = eventId,
                 ["plan_id"] = plan.Id,
-                ["item_count"] = run.Items.Count
+                ["item_count"] = run.Items.Count,
+                ["is_restart"] = isRestart
             }));
     }
 
@@ -305,7 +307,9 @@ public class RunService : IRunService
             return MapToDto(run, canControl: true);
 
         var at = TapTime(run, occurredAt);
-        Finish(run, steps[from], at);
+        var played = ElapsedSeconds(run, at);
+        var left = steps[from];
+        Finish(left, played, at);
 
         var next = from + 1 < steps.Count ? steps[from + 1] : null;
         if (next == null)
@@ -319,6 +323,8 @@ public class RunService : IRunService
         {
             if (next == null)
                 _analytics.CapturePracticeRunCompleted(run, requestingUserId);
+            else
+                _analytics.CapturePracticeRunStepChanged(run, left, next, RunStepDirection.Next, played, requestingUserId);
         });
     }
 
@@ -335,13 +341,16 @@ public class RunService : IRunService
             return MapToDto(run, canControl: true);
 
         var at = TapTime(run, occurredAt);
+        var played = ElapsedSeconds(run, at);
+        var (left, target) = (steps[from], steps[to]);
         if (to < from)
-            Discard(steps[from]);
+            Discard(left);
         else
-            Finish(run, steps[from], at);
-        Enter(run, steps[to], at);
+            Finish(left, played, at);
+        Enter(run, target, at);
 
-        return await CommitAsync(eventId, run);
+        return await CommitAsync(eventId, run, () =>
+            _analytics.CapturePracticeRunStepChanged(run, left, target, Direction(from, to), played, requestingUserId));
     }
 
     public async Task<RunDto> CompleteAsync(Guid eventId, Guid requestingUserId, DateTimeOffset? occurredAt = null)
@@ -352,7 +361,7 @@ public class RunService : IRunService
 
         var at = TapTime(run, occurredAt);
         if (run.Items.FirstOrDefault(s => s.PlanItemId == run.CurrentItemId) is { } current)
-            Finish(run, current, at);
+            Finish(current, ElapsedSeconds(run, at), at);
         End(run, at);
 
         return await CommitAsync(eventId, run, () => _analytics.CapturePracticeRunCompleted(run, requestingUserId));
@@ -382,6 +391,14 @@ public class RunService : IRunService
     private static List<TrainingPlanRunItem> Steps(TrainingPlanRun run) =>
         run.Items.OrderBy(i => i.Order).ToList();
 
+    /// <summary>A move to the neighbouring step either way, or past it, by position in the run.</summary>
+    private static string Direction(int from, int to) => (to - from) switch
+    {
+        1 => RunStepDirection.Next,
+        -1 => RunStepDirection.Previous,
+        _ => RunStepDirection.Jump,
+    };
+
     /// <summary>
     /// Makes <paramref name="step"/> current and running from the time it already has, so a step
     /// played before picks up where it stopped and a fresh one starts at zero. It keeps the moment
@@ -399,9 +416,9 @@ public class RunService : IRunService
     }
 
     /// <summary>Leaves the current step forward, keeping the time it was played.</summary>
-    private static void Finish(TrainingPlanRun run, TrainingPlanRunItem step, DateTime at)
+    private static void Finish(TrainingPlanRunItem step, int playedSeconds, DateTime at)
     {
-        step.ActualElapsedSeconds = ElapsedSeconds(run, at);
+        step.ActualElapsedSeconds = playedSeconds;
         step.CompletedAtUtc = at;
     }
 

@@ -28,6 +28,10 @@ public static class AnalyticsAssertions
     public static void CapturedNothing(this IAnalyticsCapture analytics) =>
         CaptureCalls(analytics).Should().BeEmpty("a failed operation is not a fact worth recording");
 
+    public static void CapturedNone(this IAnalyticsCapture analytics, string eventName) =>
+        CaptureCalls(analytics).Should().NotContain(
+            arguments => (string)arguments[1]! == eventName, "{0} is not what happened", eventName);
+
     private static List<object?[]> CaptureCalls(IAnalyticsCapture analytics) =>
         analytics.ReceivedCalls()
             .Where(call => call.GetMethodInfo().Name == nameof(IAnalyticsCapture.Capture))

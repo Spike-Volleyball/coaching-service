@@ -10,6 +10,7 @@ public static class AnalyticsEventNames
     public const string TrainingPlanCreated = "training_plan_created";
     public const string PracticeRunStarted = "practice_run_started";
     public const string PracticeRunCompleted = "practice_run_completed";
+    public const string PracticeRunStepChanged = "practice_run_step_changed";
 
     public const string EvaluationSessionCreated = "evaluation_session_created";
     public const string EvaluationSessionStarted = "evaluation_session_started";
@@ -31,4 +32,15 @@ public static class DrillSaveKind
 {
     public const string Like = "like";
     public const string Bookmark = "bookmark";
+}
+
+/// <summary>
+/// How a <c>practice_run_step_changed</c> moved: to the neighbouring step either way, or past it.
+/// Counted by position in the run, so a gap in the plan's numbering is not a jump.
+/// </summary>
+public static class RunStepDirection
+{
+    public const string Next = "next";
+    public const string Previous = "previous";
+    public const string Jump = "jump";
 }

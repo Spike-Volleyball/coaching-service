@@ -47,6 +47,30 @@ public static class AnalyticsCaptureExtensions
         });
 
     /// <summary>
+    /// The run moving from one step to another, by Next, Previous or a jump, with how long the step
+    /// left was played against its plan. Running off the end of the plan is not a step change; that
+    /// is <c>practice_run_completed</c>.
+    /// </summary>
+    public static void CapturePracticeRunStepChanged(
+        this IAnalyticsCapture analytics,
+        TrainingPlanRun run,
+        TrainingPlanRunItem from,
+        TrainingPlanRunItem to,
+        string direction,
+        int elapsedSeconds,
+        Guid userId) =>
+        analytics.Capture(userId, AnalyticsEventNames.PracticeRunStepChanged, new Dictionary<string, object?>
+        {
+            ["event_id"] = run.EventId,
+            ["plan_id"] = run.PlanId,
+            ["direction"] = direction,
+            ["from_order"] = from.Order,
+            ["to_order"] = to.Order,
+            ["elapsed_seconds"] = elapsedSeconds,
+            ["planned_seconds"] = from.PlannedDurationSeconds
+        });
+
+    /// <summary>
     /// One event per score submission, never one per metric: the two scoring endpoints both post
     /// a player's whole answer to one exercise, and per-metric rows would count keystrokes.
     /// </summary>
