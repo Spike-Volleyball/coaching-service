@@ -343,8 +343,8 @@ public class DrillService : IDrillService
 
     private static Drill BuildImportedDrill(ImportDrillRowDto row, ImportDrillsDto request, Guid userId)
     {
-        var instructions = DrillRichText.Resolve(null, row.Instructions, ordered: true);
-        var coachingPoints = DrillRichText.Resolve(null, row.CoachingPoints, ordered: false);
+        var instructions = ImportedProse.Instructions(row.Instructions, request.DirectionsStyle);
+        var coachingPoints = ImportedProse.CoachingPoints(row.CoachingPoints);
 
         var drill = new Drill
         {

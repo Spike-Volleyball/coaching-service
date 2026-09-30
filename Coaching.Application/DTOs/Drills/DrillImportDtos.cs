@@ -27,10 +27,15 @@ public record ImportDrillRowDto(
 /// Destination and payload for one import. Visibility and club are chosen once for the whole
 /// batch rather than per row — a spreadsheet is imported into one library at a time.
 /// </summary>
+/// <param name="DirectionsStyle">
+/// How the instructions' plain lines are listed. Lines written with a marker of their own keep
+/// it whatever this says. Absent, as from clients that predate it, is Auto.
+/// </param>
 public record ImportDrillsDto(
     Guid? ClubId,
     DrillVisibility Visibility,
-    List<ImportDrillRowDto> Drills
+    List<ImportDrillRowDto> Drills,
+    DirectionsStyle DirectionsStyle = DirectionsStyle.Auto
 );
 
 public record ImportDrillResultDto(

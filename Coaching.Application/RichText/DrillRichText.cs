@@ -105,7 +105,7 @@ public static class DrillRichText
         return !string.IsNullOrWhiteSpace(document.Body?.TextContent);
     }
 
-    private static string Collapse(string? text)
+    internal static string Collapse(string? text)
     {
         var collapsed = Whitespace.Replace(text ?? "", " ").Trim();
         return collapsed.Length > MaxLineLength ? collapsed[..MaxLineLength] : collapsed;

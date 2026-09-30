@@ -321,6 +321,79 @@ public class DrillImportServiceTests
     }
 
     [Test]
+    public async Task ImportAsync_KeepsTheStructureACellWritesWithMarkersAndHeadings()
+    {
+        // Arrange — the shape of the club director's sheet (SPI-6502): steps, then a heading
+        // over dashed variations, and dashed coaching points.
+        var row = Row(1, "Dot Shots") with
+        {
+            Instructions = ["Split into 2 teams", "Variations:", "- Line", "- Sharp cross"],
+            CoachingPoints = ["- Eyes on the hitter", "- Stay low"]
+        };
+
+        // Act
+        await _sut.ImportAsync(ImportRequest([row]), ImporterId);
+
+        // Assert
+        var drill = _persisted.Single();
+        drill.InstructionsHtml.Should().Be(
+            "<ol><li><p>Split into 2 teams</p></li>" +
+            "<li><p>Variations:</p><ul><li><p>Line</p></li><li><p>Sharp cross</p></li></ul></li></ol>");
+        drill.Instructions.Should().Equal("Split into 2 teams", "Variations:", "Line", "Sharp cross");
+        drill.CoachingPointsHtml.Should().Be("<ul><li><p>Eyes on the hitter</p></li><li><p>Stay low</p></li></ul>");
+        drill.CoachingPoints.Should().Equal("Eyes on the hitter", "Stay low");
+    }
+
+    [Test]
+    public async Task ImportAsync_ListsPlainLinesInTheDirectionsStyleTheBatchChose()
+    {
+        // Arrange
+        var row = Row(1, "Serve receive") with { Instructions = ["Split into pairs", "Serve to zone one"] };
+
+        // Act
+        await _sut.ImportAsync(ImportRequest([row], directionsStyle: DirectionsStyle.Bullets), ImporterId);
+
+        // Assert
+        _persisted.Single().InstructionsHtml.Should()
+            .Be("<ul><li><p>Split into pairs</p></li><li><p>Serve to zone one</p></li></ul>");
+    }
+
+    [Test]
+    public async Task ImportAsync_FromAClientThatSendsNoDirectionsStyle_NumbersPlainLinesAsBefore()
+    {
+        // Arrange — web builds from before the choice send the batch without it.
+        var row = Row(1, "Serve receive") with { Instructions = ["Split into pairs", "Serve to zone one"] };
+        var request = new ImportDrillsDto(null, DrillVisibility.Private, [row]);
+
+        // Act
+        await _sut.ImportAsync(request, ImporterId);
+
+        // Assert
+        _persisted.Single().InstructionsHtml.Should()
+            .Be("<ol><li><p>Split into pairs</p></li><li><p>Serve to zone one</p></li></ol>");
+    }
+
+    [Test]
+    public async Task ImportAsync_ACellHoldingOneSentence_IsAParagraph()
+    {
+        // Arrange
+        var row = Row(1, "Pepper") with
+        {
+            Instructions = ["Coach tosses to the setter, who sets the outside hitter."],
+            CoachingPoints = ["Platform early"]
+        };
+
+        // Act
+        await _sut.ImportAsync(ImportRequest([row]), ImporterId);
+
+        // Assert
+        var drill = _persisted.Single();
+        drill.InstructionsHtml.Should().Be("<p>Coach tosses to the setter, who sets the outside hitter.</p>");
+        drill.CoachingPointsHtml.Should().Be("<p>Platform early</p>");
+        drill.CoachingPoints.Should().Equal("Platform early");
+    }
+
+    [Test]
     public async Task ImportAsync_AddsEquipmentInSheetOrder()
     {
         // Arrange
@@ -385,8 +458,9 @@ public class DrillImportServiceTests
     private static ImportDrillsDto ImportRequest(
         List<ImportDrillRowDto> rows,
         Guid? clubId = null,
-        DrillVisibility visibility = DrillVisibility.Private) =>
-        new(clubId, visibility, rows);
+        DrillVisibility visibility = DrillVisibility.Private,
+        DirectionsStyle directionsStyle = DirectionsStyle.Numbered) =>
+        new(clubId, visibility, rows, directionsStyle);
 
     private static ImportDrillRowDto Row(int rowNumber, string name) => new(
         RowNumber: rowNumber,

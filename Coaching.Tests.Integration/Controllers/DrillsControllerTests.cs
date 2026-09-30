@@ -511,6 +511,42 @@ public class DrillsControllerTests
     }
 
     [Test]
+    public async Task Import_ReadsTheBodyOldAndNewWebBuildsSend()
+    {
+        // Arrange — the web sends numeric enums; builds from before the directions choice leave
+        // it out, and their dashed lines must come out structured all the same (SPI-6502).
+        await SeedAsync([CreatorProfile()]);
+        SetAuth(CreatorId);
+        static string Body(string name, string? style) =>
+            "{\"visibility\":1," + (style is null ? "" : $"\"directionsStyle\":{style},") +
+            "\"drills\":[{\"rowNumber\":1,\"name\":\"" + name + "\",\"category\":1,\"intensity\":1,\"skills\":[1]," +
+            "\"instructions\":[\"Split into 2 teams\",\"Variations:\",\"- Line\",\"- Sharp cross\"]," +
+            "\"coachingPoints\":[\"- Stay low\"],\"equipment\":[]}]}";
+
+        // Act
+        var oldBuild = await _client.PostAsync("/v1/drills/import",
+            new StringContent(Body("From an old build", null), Encoding.UTF8, "application/json"));
+        var bulleted = await _client.PostAsync("/v1/drills/import",
+            new StringContent(Body("Bulleted", "2"), Encoding.UTF8, "application/json"));
+
+        // Assert
+        oldBuild.StatusCode.Should().Be(HttpStatusCode.OK, await oldBuild.Content.ReadAsStringAsync());
+        bulleted.StatusCode.Should().Be(HttpStatusCode.OK, await bulleted.Content.ReadAsStringAsync());
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var drills = await scope.ServiceProvider.GetRequiredService<CoachingDbContext>()
+            .Drills.AsNoTracking().ToDictionaryAsync(d => d.Name);
+
+        const string points = "<ul><li><p>Line</p></li><li><p>Sharp cross</p></li></ul>";
+        drills["From an old build"].InstructionsHtml.Should().Be(
+            $"<ol><li><p>Split into 2 teams</p></li><li><p>Variations:</p>{points}</li></ol>");
+        drills["Bulleted"].InstructionsHtml.Should().Be(
+            $"<ul><li><p>Split into 2 teams</p></li><li><p>Variations:</p>{points}</li></ul>");
+        drills["Bulleted"].Instructions.Should().Equal("Split into 2 teams", "Variations:", "Line", "Sharp cross");
+        drills["Bulleted"].CoachingPointsHtml.Should().Be("<ul><li><p>Stay low</p></li></ul>");
+    }
+
+    [Test]
     public async Task GetById_PublicDrill_OpensForAnySignedInReader()
     {
         // Arrange
