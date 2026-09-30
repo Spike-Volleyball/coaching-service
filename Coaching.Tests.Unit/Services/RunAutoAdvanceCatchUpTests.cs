@@ -5,10 +5,12 @@ using FluentAssertions;
 namespace Coaching.Tests.Unit.Services;
 
 /// <summary>
-/// Auto-advance's one rule. A locked phone runs no code when a drill's time is up, so the server
+/// Auto-advance's rules. A locked phone runs no code when a drill's time is up, so the server
 /// moves the run on — at the moment the time was up, not whenever it next looks, so a run it catches
 /// up late reads as if it had moved on on time. The last step never finishes by itself, and a step
-/// with no planned time stops it. Steps of 5, 10 and 15 minutes.
+/// with no planned time stops it. A step entered after it ran its full time starts over, and
+/// auto-advance taking hold on a step already out of time moves on then, not back when the time
+/// ran out. Steps of 5, 10 and 15 minutes.
 /// </summary>
 [TestFixture]
 [Category("Unit")]
@@ -256,13 +258,14 @@ public class RunAutoAdvanceCatchUpTests : RunServiceTestBase
     }
 
     [Test]
-    public void CatchUp_IntoAStepPlayedToItsEndBefore_MovesStraightThroughIt()
+    public void CatchUp_IntoAStepThatRanItsFullTimeBefore_StartsItOver()
     {
-        // Arrange — step 2 had been played all ten minutes before the coach went back to step 1.
-        // Entered again, it resumes with no time left, so its time is up the instant it starts.
+        // Arrange — step 2 had run all ten minutes before the coach went back to step 1. Resumed
+        // with no time left it would be left again the instant it was entered, so it starts over.
         var run = AutoAdvancingOn(Step1Id, elapsedSeconds: 310);
         var step2 = Step(run, Step2Id);
-        step2.StartedAtUtc = Now.AddMinutes(-20);
+        var firstEntered = Now.AddMinutes(-20);
+        step2.StartedAtUtc = firstEntered;
         step2.ActualElapsedSeconds = 600;
         step2.CompletedAtUtc = Now.AddMinutes(-10);
         var due = Now.AddSeconds(-10);
@@ -271,10 +274,174 @@ public class RunAutoAdvanceCatchUpTests : RunServiceTestBase
         var moved = RunAutoAdvance.CatchUp(run, Now);
 
         // Assert
-        moved.Select(m => (m.From.PlanItemId, m.To.PlanItemId, m.At)).Should().Equal(
-            (Step1Id, Step2Id, due),
-            (Step2Id, Step3Id, due));
-        run.CurrentItemId.Should().Be(Step3Id);
+        moved.Should().ContainSingle().Which.To.Should().BeSameAs(step2);
+        run.CurrentItemId.Should().Be(Step2Id);
         run.CurrentItemStartedAtUtc.Should().Be(due);
+        run.CurrentItemPausedElapsedSeconds.Should().Be(0);
+        step2.ActualElapsedSeconds.Should().Be(0);
+        step2.StartedAtUtc.Should().Be(firstEntered);
+    }
+
+    [Test]
+    public void CatchUp_IntoTheLastStepAfterItRanItsFullTime_ResumesItIntoOvertime()
+    {
+        // Arrange — step 3 had run its fifteen minutes out before the coach went back to step 2,
+        // whose time has now run out too. The last step never moves on, so it only runs over.
+        var run = AutoAdvancingOn(Step2Id, elapsedSeconds: 610);
+        var step3 = Step(run, Step3Id);
+        step3.StartedAtUtc = Now.AddMinutes(-40);
+        step3.ActualElapsedSeconds = 950;
+        step3.CompletedAtUtc = Now.AddMinutes(-20);
+        var due = Now.AddSeconds(-10);
+
+        // Act
+        RunAutoAdvance.CatchUp(run, Now);
+
+        // Assert
+        run.CurrentItemId.Should().Be(Step3Id);
+        run.CurrentItemStartedAtUtc.Should().Be(due.AddSeconds(-950));
+        step3.ActualElapsedSeconds.Should().Be(950);
+    }
+
+    [Test]
+    public void CatchUp_ReturnsTheTimeEachStepMovedThroughWasPlayed()
+    {
+        // Arrange
+        var run = AutoAdvancingOn(Step1Id, elapsedSeconds: 300 + 600 + 30);
+
+        // Act
+        var moved = RunAutoAdvance.CatchUp(run, Now);
+
+        // Assert
+        moved.Select(m => m.PlayedSeconds).Should().Equal(300, 600);
+    }
+
+    // ---------- Arming: switched on, or resumed, with the step's time already up ----------
+
+    [Test]
+    public void Arm_OnAStepInOvertime_MovesOnNowWithTheTimeItReallyRan()
+    {
+        // Arrange — step 1 has run 100 seconds over its five minutes.
+        var run = AutoAdvancingOn(Step1Id, elapsedSeconds: 400);
+
+        // Act
+        var moved = RunAutoAdvance.Arm(run, Now);
+
+        // Assert — not from when its time ran out, which would start step 2 100 seconds in
+        moved.Should().ContainSingle();
+        moved[0].At.Should().Be(Now);
+        moved[0].PlayedSeconds.Should().Be(400);
+
+        var left = Step(run, Step1Id);
+        left.ActualElapsedSeconds.Should().Be(400);
+        left.CompletedAtUtc.Should().Be(Now);
+
+        run.CurrentItemId.Should().Be(Step2Id);
+        run.CurrentItemStartedAtUtc.Should().Be(Now);
+    }
+
+    [Test]
+    public void Arm_OnAStepExactlyAtItsTime_MovesOnNow()
+    {
+        // Arrange
+        var run = AutoAdvancingOn(Step1Id, elapsedSeconds: 300);
+
+        // Act
+        var moved = RunAutoAdvance.Arm(run, Now);
+
+        // Assert
+        moved.Should().ContainSingle().Which.PlayedSeconds.Should().Be(300);
+        run.CurrentItemId.Should().Be(Step2Id);
+    }
+
+    [Test]
+    public void Arm_OnAStepWithTimeLeft_LeavesItRunning()
+    {
+        // Arrange
+        var run = AutoAdvancingOn(Step1Id, elapsedSeconds: 200);
+
+        // Act
+        var moved = RunAutoAdvance.Arm(run, Now);
+
+        // Assert
+        moved.Should().BeEmpty();
+        run.CurrentItemId.Should().Be(Step1Id);
+        run.CurrentItemStartedAtUtc.Should().Be(Now.AddSeconds(-200));
+    }
+
+    [Test]
+    public void Arm_OnTheLastStepInOvertime_LeavesItRunningOver()
+    {
+        // Arrange
+        var run = AutoAdvancingOn(Step3Id, elapsedSeconds: 1000);
+
+        // Act
+        var moved = RunAutoAdvance.Arm(run, Now);
+
+        // Assert
+        moved.Should().BeEmpty();
+        run.CurrentItemId.Should().Be(Step3Id);
+    }
+
+    [Test]
+    public void Arm_OnAStepWithNoPlannedTime_LeavesItRunning()
+    {
+        // Arrange
+        var run = AutoAdvancingOn(Step1Id, elapsedSeconds: 400);
+        Step(run, Step1Id).PlannedDurationSeconds = 0;
+
+        // Act
+        var moved = RunAutoAdvance.Arm(run, Now);
+
+        // Assert
+        moved.Should().BeEmpty();
+        run.CurrentItemId.Should().Be(Step1Id);
+    }
+
+    [Test]
+    public void Arm_WithAutoAdvanceOff_LeavesTheStepInOvertime()
+    {
+        // Arrange
+        var run = RunningOn(Step1Id, elapsedSeconds: 400);
+
+        // Act
+        var moved = RunAutoAdvance.Arm(run, Now);
+
+        // Assert
+        moved.Should().BeEmpty();
+        run.CurrentItemId.Should().Be(Step1Id);
+    }
+
+    [Test]
+    public void Arm_WhilePaused_LeavesTheRunAlone()
+    {
+        // Arrange — the step moves on when the run is resumed, not while it is paused.
+        var run = PausedOn(Step1Id, elapsedSeconds: 400);
+        run.AutoAdvance = true;
+
+        // Act
+        var moved = RunAutoAdvance.Arm(run, Now);
+
+        // Assert
+        moved.Should().BeEmpty();
+        run.Status.Should().Be(RunStatus.Paused);
+        run.CurrentItemId.Should().Be(Step1Id);
+    }
+
+    [Test]
+    public void Arm_IntoAStepThatRanItsFullTimeBefore_StartsItOver()
+    {
+        // Arrange — step 1 in overtime; step 2 had run all ten minutes on an earlier visit.
+        var run = AutoAdvancingOn(Step1Id, elapsedSeconds: 400);
+        Step(run, Step2Id).StartedAtUtc = Now.AddMinutes(-30);
+        Step(run, Step2Id).ActualElapsedSeconds = 600;
+
+        // Act
+        RunAutoAdvance.Arm(run, Now);
+
+        // Assert
+        run.CurrentItemId.Should().Be(Step2Id);
+        run.CurrentItemStartedAtUtc.Should().Be(Now);
+        Step(run, Step2Id).ActualElapsedSeconds.Should().Be(0);
     }
 }

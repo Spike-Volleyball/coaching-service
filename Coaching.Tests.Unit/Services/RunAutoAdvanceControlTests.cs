@@ -159,25 +159,181 @@ public class RunAutoAdvanceControlTests : RunServiceTestBase
         result.Items.Single(i => i.PlanItemId == Step2Id).CompletedAt.Should().Be(Now.AddSeconds(-20));
     }
 
+    // ---------- A step that ran its full time starts over ----------
+
     [Test]
-    public async Task GoToAsync_BackToAStepThatRanItsTimeOut_MovesOnFromItAgainAtOnce()
+    public async Task GoToAsync_BackToAStepThatRanItsFullTime_PlaysItsFullTimeAgain()
     {
         // Arrange — step 1 ran its five minutes out; a minute into step 2 the coach goes back to it.
-        // It is entered again with no time left, so by the rule it is left the instant it is
-        // entered, and step 2 — discarded by the step back — starts over.
+        // Resumed with no time left it would bounce straight forward again.
         StubRun(AutoAdvancingOn(Step2Id, elapsedSeconds: 60));
 
         // Act
         var result = await _sut.GoToAsync(EventId, Step2Id, Step1Id, CreatorId);
 
         // Assert
+        result.CurrentItemId.Should().Be(Step1Id);
+        result.CurrentItemStartedAt.Should().Be(Now);
+        result.CurrentItemPausedElapsedSeconds.Should().Be(0);
+        result.Items.Single(i => i.PlanItemId == Step1Id).ActualElapsedSeconds.Should().Be(0);
+        await _runRepository.Received(1).SaveChangesAsync();
+        _analytics.CapturedEach(AnalyticsEventNames.PracticeRunStepChanged)
+            .Should().ContainSingle().Which.Properties["direction"].Should().Be(RunStepDirection.Previous);
+    }
+
+    [Test]
+    public async Task GoToAsync_BackToAStepLeftEarly_ResumesItsRecordedTime()
+    {
+        // Arrange — Next was tapped two minutes into step 1's five; 20 seconds later, Previous.
+        var run = AutoAdvancingOn(Step2Id, elapsedSeconds: 20);
+        Step(run, Step1Id).ActualElapsedSeconds = 120;
+        StubRun(run);
+
+        // Act
+        var result = await _sut.GoToAsync(EventId, Step2Id, Step1Id, CreatorId);
+
+        // Assert
+        result.CurrentItemId.Should().Be(Step1Id);
+        result.CurrentItemStartedAt.Should().Be(Now.AddSeconds(-120));
+    }
+
+    [Test]
+    public async Task GoToAsync_WithAutoAdvanceOff_BackToAStepThatRanItsFullTime_ResumesItsRecordedTime()
+    {
+        // Arrange
+        StubRun(RunningOn(Step2Id, elapsedSeconds: 60));
+
+        // Act
+        var result = await _sut.GoToAsync(EventId, Step2Id, Step1Id, CreatorId);
+
+        // Assert
+        result.CurrentItemId.Should().Be(Step1Id);
+        result.CurrentItemStartedAt.Should().Be(Now.AddSeconds(-300));
+    }
+
+    [Test]
+    public async Task AdvanceAsync_IntoAStepThatRanItsFullTime_PlaysItsFullTimeAgain()
+    {
+        // Arrange — back on step 1 after step 2 had run all ten minutes.
+        var run = AutoAdvancingOn(Step1Id, elapsedSeconds: 30);
+        Step(run, Step2Id).StartedAtUtc = Now.AddMinutes(-20);
+        Step(run, Step2Id).ActualElapsedSeconds = 600;
+        StubRun(run);
+
+        // Act
+        var result = await _sut.AdvanceAsync(EventId, Step1Id, CreatorId);
+
+        // Assert
         result.CurrentItemId.Should().Be(Step2Id);
         result.CurrentItemStartedAt.Should().Be(Now);
+        result.Items.Single(i => i.PlanItemId == Step2Id).ActualElapsedSeconds.Should().Be(0);
+    }
+
+    [Test]
+    public async Task ReopenAsync_OnAStepThatRanItsFullTimeWithAStepAfter_PlaysItsFullTimeAgain()
+    {
+        // Arrange — End Session was tapped with step 2 100 seconds over its ten minutes.
+        var run = CompletedOn(Step2Id, elapsedSeconds: 700);
+        run.AutoAdvance = true;
+        StubRun(run);
+
+        // Act
+        var result = await _sut.ReopenAsync(EventId, CreatorId);
+
+        // Assert
+        result.Status.Should().Be(RunStatus.Running);
+        result.CurrentItemId.Should().Be(Step2Id);
+        result.CurrentItemStartedAt.Should().Be(Now);
+    }
+
+    [Test]
+    public async Task ReopenAsync_OnTheLastStep_ResumesItsTimeIntoOvertime()
+    {
+        // Arrange — the session ran off the end of the plan 100 seconds over step 3's fifteen minutes.
+        var run = CompletedOn(Step3Id, elapsedSeconds: 1000);
+        run.AutoAdvance = true;
+        StubRun(run);
+
+        // Act
+        var result = await _sut.ReopenAsync(EventId, CreatorId);
+
+        // Assert
+        result.CurrentItemId.Should().Be(Step3Id);
+        result.CurrentItemStartedAt.Should().Be(Now.AddSeconds(-1000));
+    }
+
+    // ---------- Arming never reaches back in time ----------
+
+    [Test]
+    public async Task ResumeAsync_PausedInOvertime_MovesOnAtTheResume()
+    {
+        // Arrange — paused 100 seconds past step 1's five minutes, with auto-advance on.
+        var run = PausedOn(Step1Id, elapsedSeconds: 400);
+        run.AutoAdvance = true;
+        StubRun(run);
+
+        // Act
+        var result = await _sut.ResumeAsync(EventId, CreatorId);
+
+        // Assert
+        result.Status.Should().Be(RunStatus.Running);
+        result.CurrentItemId.Should().Be(Step2Id);
+        result.CurrentItemStartedAt.Should().Be(Now);
+
+        var left = result.Items.Single(i => i.PlanItemId == Step1Id);
+        left.ActualElapsedSeconds.Should().Be(400);
+        left.CompletedAt.Should().Be(Now);
+
         await _runRepository.Received(1).SaveChangesAsync();
-        await _broadcaster.Received(1).BroadcastRunUpdatedAsync(EventId, Arg.Is<RunDto>(d => d.CurrentItemId == Step2Id));
-        _analytics.CapturedEach(AnalyticsEventNames.PracticeRunStepChanged)
-            .Select(c => c.Properties["direction"])
-            .Should().Equal(RunStepDirection.Previous, RunStepDirection.Auto);
+        var step = _analytics.CapturedEach(AnalyticsEventNames.PracticeRunStepChanged).Should().ContainSingle().Subject;
+        step.Properties["direction"].Should().Be(RunStepDirection.Auto);
+        step.Properties["elapsed_seconds"].Should().Be(400);
+    }
+
+    [Test]
+    public async Task ResumeAsync_PausedWithTimeLeft_ResumesTheStep()
+    {
+        // Arrange
+        var run = PausedOn(Step1Id, elapsedSeconds: 200);
+        run.AutoAdvance = true;
+        StubRun(run);
+
+        // Act
+        var result = await _sut.ResumeAsync(EventId, CreatorId);
+
+        // Assert
+        result.CurrentItemId.Should().Be(Step1Id);
+        result.CurrentItemStartedAt.Should().Be(Now.AddSeconds(-200));
+    }
+
+    [Test]
+    public async Task ResumeAsync_PausedInOvertimeOnTheLastStep_ResumesItRunningOver()
+    {
+        // Arrange
+        var run = PausedOn(Step3Id, elapsedSeconds: 1000);
+        run.AutoAdvance = true;
+        StubRun(run);
+
+        // Act
+        var result = await _sut.ResumeAsync(EventId, CreatorId);
+
+        // Assert
+        result.CurrentItemId.Should().Be(Step3Id);
+        result.CurrentItemStartedAt.Should().Be(Now.AddSeconds(-1000));
+    }
+
+    [Test]
+    public async Task ResumeAsync_WithAutoAdvanceOff_ResumesTheStepInOvertime()
+    {
+        // Arrange
+        StubRun(PausedOn(Step1Id, elapsedSeconds: 400));
+
+        // Act
+        var result = await _sut.ResumeAsync(EventId, CreatorId);
+
+        // Assert
+        result.CurrentItemId.Should().Be(Step1Id);
+        result.CurrentItemStartedAt.Should().Be(Now.AddSeconds(-400));
     }
 
     [Test]
@@ -250,20 +406,58 @@ public class RunAutoAdvanceControlTests : RunServiceTestBase
     }
 
     [Test]
-    public async Task SetAutoAdvanceAsync_OnWithTheStepInOvertime_MovesOnFromWhenItsTimeRanOut()
+    public async Task SetAutoAdvanceAsync_OnWithTheStepInOvertime_MovesOnNow()
     {
-        // Arrange — step 1 has run 100 seconds over when the coach switches auto-advance on. The
-        // rule starts step 2 where step 1's time ran out.
+        // Arrange — step 1 has run 100 seconds over when the coach switches auto-advance on.
+        // Moving on from when its time ran out would start step 2 with the overtime spent.
         StubRun(RunningOn(Step1Id, elapsedSeconds: 400));
 
         // Act
         var result = await _sut.SetAutoAdvanceAsync(EventId, enabled: true, CreatorId);
 
         // Assert
+        result.AutoAdvance.Should().BeTrue();
         result.CurrentItemId.Should().Be(Step2Id);
-        result.CurrentItemStartedAt.Should().Be(Now.AddSeconds(-100));
-        result.Items.Single(i => i.PlanItemId == Step1Id).ActualElapsedSeconds.Should().Be(300);
+        result.CurrentItemStartedAt.Should().Be(Now);
+
+        var left = result.Items.Single(i => i.PlanItemId == Step1Id);
+        left.ActualElapsedSeconds.Should().Be(400);
+        left.CompletedAt.Should().Be(Now);
+
         await _runRepository.Received(1).SaveChangesAsync();
+        var step = _analytics.CapturedEach(AnalyticsEventNames.PracticeRunStepChanged).Should().ContainSingle().Subject;
+        step.UserId.Should().Be(CreatorId);
+        step.Properties["direction"].Should().Be(RunStepDirection.Auto);
+        step.Properties["elapsed_seconds"].Should().Be(400);
+    }
+
+    [Test]
+    public async Task SetAutoAdvanceAsync_OnWithTimeLeft_LeavesTheStepRunning()
+    {
+        // Arrange
+        StubRun(RunningOn(Step1Id, elapsedSeconds: 200));
+
+        // Act
+        var result = await _sut.SetAutoAdvanceAsync(EventId, enabled: true, CreatorId);
+
+        // Assert
+        result.CurrentItemId.Should().Be(Step1Id);
+        result.CurrentItemStartedAt.Should().Be(Now.AddSeconds(-200));
+    }
+
+    [Test]
+    public async Task SetAutoAdvanceAsync_OnWhilePausedInOvertime_LeavesItPausedOnTheStep()
+    {
+        // Arrange — it moves on when resumed, not while paused.
+        StubRun(PausedOn(Step1Id, elapsedSeconds: 400));
+
+        // Act
+        var result = await _sut.SetAutoAdvanceAsync(EventId, enabled: true, CreatorId);
+
+        // Assert
+        result.AutoAdvance.Should().BeTrue();
+        result.Status.Should().Be(RunStatus.Paused);
+        result.CurrentItemId.Should().Be(Step1Id);
     }
 
     [TestCase(RunStatus.Paused)]

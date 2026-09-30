@@ -38,7 +38,10 @@ public interface IRunService
     /// <summary>Capture elapsed, set Paused.</summary>
     Task<RunDto> PauseAsync(Guid eventId, Guid requestingUserId, DateTimeOffset? occurredAt = null);
 
-    /// <summary>Re-anchor the virtual start, set Running.</summary>
+    /// <summary>
+    /// Re-anchor the virtual start, set Running. A run moving on by itself that was paused with
+    /// its step's time already up moves on at the resume.
+    /// </summary>
     Task<RunDto> ResumeAsync(Guid eventId, Guid requestingUserId, DateTimeOffset? occurredAt = null);
 
     /// <summary>
@@ -61,7 +64,8 @@ public interface IRunService
 
     /// <summary>
     /// Whether the run moves on by itself when a step's time is up, from now on. Any status; a
-    /// run already so set is returned unchanged.
+    /// run already so set is returned unchanged. Switched on while running with the step's time
+    /// already up, the run moves on now.
     /// </summary>
     Task<RunDto> SetAutoAdvanceAsync(Guid eventId, bool enabled, Guid requestingUserId);
 }

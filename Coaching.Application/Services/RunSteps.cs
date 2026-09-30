@@ -15,10 +15,15 @@ public static class RunSteps
     /// <summary>
     /// Makes <paramref name="step"/> current and running from the time it already has, so a step
     /// played before picks up where it stopped and a fresh one starts at zero. It keeps the moment
-    /// it was first entered.
+    /// it was first entered. On a run moving on by itself, a step that already ran its full planned
+    /// time starts over instead — resumed with no time left, it would be left again the instant it
+    /// was entered — unless it is the last, which only ever runs over.
     /// </summary>
     public static void Enter(TrainingPlanRun run, TrainingPlanRunItem step, DateTime at)
     {
+        if (run.AutoAdvance && IsPlayedOut(step, step.ActualElapsedSeconds) && HasStepAfter(run, step))
+            step.ActualElapsedSeconds = 0;
+
         step.StartedAtUtc ??= at;
         step.CompletedAtUtc = null;
 
@@ -52,6 +57,18 @@ public static class RunSteps
         run.CurrentItemId = null;
         run.CurrentItemStartedAtUtc = null;
         run.CompletedAtUtc = at;
+    }
+
+    /// <summary>Whether <paramref name="step"/>, played <paramref name="playedSeconds"/>, has used all of a planned time.</summary>
+    public static bool IsPlayedOut(TrainingPlanRunItem step, int playedSeconds) =>
+        step.PlannedDurationSeconds > 0 && playedSeconds >= step.PlannedDurationSeconds;
+
+    /// <summary>Whether a step comes after <paramref name="step"/> in the run, by position.</summary>
+    public static bool HasStepAfter(TrainingPlanRun run, TrainingPlanRunItem step)
+    {
+        var steps = InOrder(run);
+        var index = steps.IndexOf(step);
+        return index >= 0 && index < steps.Count - 1;
     }
 
     public static int ElapsedSeconds(TrainingPlanRun run, DateTime at)

@@ -301,10 +301,11 @@ public class RunService : IRunService
         if (run.Status != RunStatus.Paused)
             return MapToDto(run, canControl: true);
 
-        run.CurrentItemStartedAtUtc = TapTime(run, movedOn, occurredAt).AddSeconds(-run.CurrentItemPausedElapsedSeconds);
+        var at = TapTime(run, movedOn, occurredAt);
+        run.CurrentItemStartedAtUtc = at.AddSeconds(-run.CurrentItemPausedElapsedSeconds);
         run.Status = RunStatus.Running;
 
-        return await CommitAsync(eventId, run, movedOn);
+        return await CommitAsync(eventId, run, [.. movedOn, .. RunAutoAdvance.Arm(run, at)]);
     }
 
     public async Task<RunDto> AdvanceAsync(Guid eventId, Guid fromItemId, Guid requestingUserId, DateTimeOffset? occurredAt = null)
@@ -406,7 +407,7 @@ public class RunService : IRunService
             return MapToDto(run, canControl: true);
 
         run.AutoAdvance = enabled;
-        return await CommitAsync(eventId, run, movedOn);
+        return await CommitAsync(eventId, run, [.. movedOn, .. RunAutoAdvance.Arm(run, Now())]);
     }
 
     /// <summary>A move to the neighbouring step either way, or past it, by position in the run.</summary>
@@ -523,7 +524,7 @@ public class RunService : IRunService
         foreach (var step in movedOn)
         {
             _analytics.CapturePracticeRunStepChanged(
-                run, step.From, step.To, RunStepDirection.Auto, step.From.PlannedDurationSeconds, run.StartedByUserId);
+                run, step.From, step.To, RunStepDirection.Auto, step.PlayedSeconds, run.StartedByUserId);
         }
     }
 

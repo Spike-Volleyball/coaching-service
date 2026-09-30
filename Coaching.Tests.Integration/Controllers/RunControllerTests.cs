@@ -962,6 +962,47 @@ public class RunControllerTests
     }
 
     [Test]
+    public async Task SetAutoAdvance_OnWhileTheItemRunsOver_MovesOnNow()
+    {
+        // Arrange — ten seconds past the first item's five minutes, by hand.
+        var (eventId, item1Id, item2Id) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+        await BackdateCurrentItemAsync(eventId, DateTime.UtcNow.AddSeconds(-310));
+
+        // Act
+        var response = await _client.PostAsJsonAsync(
+            $"/v1/events/{eventId}/plans/run/auto-advance", new RunAutoAdvanceDto(true), JsonOptions);
+
+        // Assert — the second item starts now, not ten seconds in
+        var run = await response.Content.ReadFromJsonAsync<RunDto>(JsonOptions);
+        run!.CurrentItemId.Should().Be(item2Id);
+        run.CurrentItemStartedAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
+        run.Items.Single(i => i.PlanItemId == item1Id).ActualElapsedSeconds.Should().BeGreaterThanOrEqualTo(310);
+    }
+
+    [Test]
+    public async Task GoTo_BackToAnItemThatRanItsFullTime_PlaysItsFullTimeAgain()
+    {
+        // Arrange — the first item's five minutes ran out and the run moved on by itself.
+        var (eventId, item1Id, item2Id) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsJsonAsync($"/v1/events/{eventId}/plans/run/start", new StartRunDto(AutoAdvance: true), JsonOptions);
+        await BackdateCurrentItemAsync(eventId, DateTime.UtcNow.AddSeconds(-310));
+
+        // Act
+        var response = await _client.PostAsJsonAsync(
+            $"/v1/events/{eventId}/plans/run/goto", new GoToRunDto(item2Id, item1Id), JsonOptions);
+
+        // Assert — back on it from the start, rather than bounced straight forward again
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var run = await response.Content.ReadFromJsonAsync<RunDto>(JsonOptions);
+        run!.CurrentItemId.Should().Be(item1Id);
+        run.CurrentItemStartedAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
+        run.Items.Single(i => i.PlanItemId == item1Id).ActualElapsedSeconds.Should().Be(0);
+    }
+
+    [Test]
     public async Task Advance_FromTheItemTheRunMovedOnTo_SavesTheMoveWithTheTap()
     {
         // Arrange — the phone flipped to the second item at 0:00, and its Next ends the session.
