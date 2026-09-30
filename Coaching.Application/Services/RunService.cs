@@ -14,6 +14,9 @@ public class RunService : IRunService
 {
     private const int SecondsPerMinute = 60;
 
+    /// <summary>How far back a tap queued on a phone with no signal may say it happened.</summary>
+    private static readonly TimeSpan QueuedTapWindow = TimeSpan.FromMinutes(15);
+
     private readonly ITrainingPlanRunRepository _runRepository;
     private readonly ITrainingPlanRunItemRepository _runItemRepository;
     private readonly IRunStationRepository _stationRepository;
@@ -57,12 +60,13 @@ public class RunService : IRunService
         return run == null ? null : MapToDto(run, canControl);
     }
 
-    // Mirrors TrainingPlanService.GetByEventIdAsync's participant/eventExists check (the sibling
-    // read for the same event-attached plan) exactly, extended with the event-admin/host check
-    // already used elsewhere in coaching-service (FeedbackAuthorizationService,
-    // TrainingPlanService.PromoteToTemplateAsync) for the case where a host isn't in the
-    // events-service participant roster.
-    /// <returns>Whether the reader is an event admin — which is also what lets them control the run.</returns>
+    /// <summary>
+    /// Mirrors TrainingPlanService.GetByEventIdAsync's participant/eventExists check (the sibling
+    /// read for the same event-attached plan), extended with the event-admin check for a host who
+    /// isn't in the events-service participant roster. Both are asked at once: whether the reader
+    /// is an admin is also whether they may control the run.
+    /// </summary>
+    /// <returns>Whether the reader is an event admin.</returns>
     private async Task<bool> EnsureCanReadRunAsync(Guid eventId, Guid userId)
     {
         var participant = _eventsGrpcClient.IsEventParticipantAsync(eventId, userId);
@@ -213,7 +217,7 @@ public class RunService : IRunService
             ["item_count"] = run.Items.Count
         });
 
-        return await BroadcastAsync(eventId, run, true);
+        return await BroadcastAsync(eventId, run);
     }
 
     /// <summary>
@@ -267,130 +271,206 @@ public class RunService : IRunService
         _stationRepository.AddRange(replacements);
     }
 
-    public async Task<RunDto> PauseAsync(Guid eventId, Guid requestingUserId)
+    public async Task<RunDto> PauseAsync(Guid eventId, Guid requestingUserId, DateTimeOffset? occurredAt = null)
     {
-        var (run, isCreator) = await LoadForControlAsync(eventId, requestingUserId);
+        var run = await LoadForControlAsync(eventId, requestingUserId);
+        if (run.Status != RunStatus.Running)
+            return MapToDto(run, canControl: true);
 
-        if (run.Status == RunStatus.Running)
-        {
-            run.CurrentItemPausedElapsedSeconds = ElapsedSeconds(run, Now());
-            run.CurrentItemStartedAtUtc = null;
-            run.Status = RunStatus.Paused;
-            await _runRepository.SaveChangesAsync();
-            return await BroadcastAsync(eventId, run, isCreator);
-        }
+        run.CurrentItemPausedElapsedSeconds = ElapsedSeconds(run, TapTime(run, occurredAt));
+        run.CurrentItemStartedAtUtc = null;
+        run.Status = RunStatus.Paused;
 
-        return MapToDto(run, isCreator);
+        await _runRepository.SaveChangesAsync();
+        return await BroadcastAsync(eventId, run);
     }
 
-    public async Task<RunDto> ResumeAsync(Guid eventId, Guid requestingUserId)
+    public async Task<RunDto> ResumeAsync(Guid eventId, Guid requestingUserId, DateTimeOffset? occurredAt = null)
     {
-        var (run, isCreator) = await LoadForControlAsync(eventId, requestingUserId);
+        var run = await LoadForControlAsync(eventId, requestingUserId);
+        if (run.Status != RunStatus.Paused)
+            return MapToDto(run, canControl: true);
 
-        if (run.Status == RunStatus.Paused)
-        {
-            run.CurrentItemStartedAtUtc = Now().AddSeconds(-run.CurrentItemPausedElapsedSeconds);
-            run.Status = RunStatus.Running;
-            await _runRepository.SaveChangesAsync();
-            return await BroadcastAsync(eventId, run, isCreator);
-        }
+        run.CurrentItemStartedAtUtc = TapTime(run, occurredAt).AddSeconds(-run.CurrentItemPausedElapsedSeconds);
+        run.Status = RunStatus.Running;
 
-        return MapToDto(run, isCreator);
+        await _runRepository.SaveChangesAsync();
+        return await BroadcastAsync(eventId, run);
     }
 
-    public async Task<RunDto> AdvanceAsync(Guid eventId, Guid fromItemId, Guid requestingUserId)
+    public async Task<RunDto> AdvanceAsync(Guid eventId, Guid fromItemId, Guid requestingUserId, DateTimeOffset? occurredAt = null)
     {
-        var (run, isCreator) = await LoadForControlAsync(eventId, requestingUserId);
+        var run = await LoadForControlAsync(eventId, requestingUserId);
+        var steps = Steps(run);
+        var from = steps.FindIndex(s => s.PlanItemId == fromItemId);
 
-        // Guard against double-tap / concurrent advance.
-        if (run.CurrentItemId != fromItemId)
-            return MapToDto(run, isCreator);
+        // A double tap, or one queued on a screen that has since moved on.
+        if (run.CurrentItemId != fromItemId || from < 0)
+            return MapToDto(run, canControl: true);
 
-        FinalizeCurrentItem(run);
+        var at = TapTime(run, occurredAt);
+        Finish(run, steps[from], at);
 
-        var ordered = run.Items.OrderBy(i => i.Order).ToList();
-        var currentOrder = ordered.First(c => c.PlanItemId == fromItemId).Order;
-        var nextItem = ordered.FirstOrDefault(i => i.Order > currentOrder
-            && i.CompletedAtUtc == null);
-
-        var now = Now();
-        if (nextItem == null)
-        {
-            run.Status = RunStatus.Completed;
-            run.CurrentItemId = null;
-            run.CurrentItemStartedAtUtc = null;
-            run.CompletedAtUtc = now;
-        }
+        var next = from + 1 < steps.Count ? steps[from + 1] : null;
+        if (next == null)
+            End(run, at);
         else
-        {
-            run.CurrentItemId = nextItem.PlanItemId;
-            run.CurrentItemStartedAtUtc = now;
-            run.CurrentItemPausedElapsedSeconds = 0;
-            nextItem.StartedAtUtc = now;
-        }
+            Enter(run, next, at);
 
         await _runRepository.SaveChangesAsync();
 
         // Advancing off the end of the plan is the run finishing, and that is the same fact the
         // finish button records — so it is the same event, once, from whichever path got there.
-        if (nextItem == null)
+        if (next == null)
             _analytics.CapturePracticeRunCompleted(run, requestingUserId);
 
-        return await BroadcastAsync(eventId, run, isCreator);
+        return await BroadcastAsync(eventId, run);
     }
 
-    public async Task<RunDto> CompleteAsync(Guid eventId, Guid requestingUserId)
+    public async Task<RunDto> GoToAsync(Guid eventId, Guid fromItemId, Guid toItemId, Guid requestingUserId, DateTimeOffset? occurredAt = null)
     {
-        var (run, isCreator) = await LoadForControlAsync(eventId, requestingUserId);
+        var run = await LoadForControlAsync(eventId, requestingUserId);
+        var steps = Steps(run);
+        var from = steps.FindIndex(s => s.PlanItemId == fromItemId);
+        var to = steps.FindIndex(s => s.PlanItemId == toItemId);
 
+        // A stale tap, as for advance — and a target that is no step of this run, or the step
+        // already current, has nowhere to go.
+        if (run.CurrentItemId != fromItemId || from < 0 || to < 0 || to == from)
+            return MapToDto(run, canControl: true);
+
+        var at = TapTime(run, occurredAt);
+        if (to < from)
+            Discard(steps[from]);
+        else
+            Finish(run, steps[from], at);
+        Enter(run, steps[to], at);
+
+        await _runRepository.SaveChangesAsync();
+        return await BroadcastAsync(eventId, run);
+    }
+
+    public async Task<RunDto> CompleteAsync(Guid eventId, Guid requestingUserId, DateTimeOffset? occurredAt = null)
+    {
+        var run = await LoadForControlAsync(eventId, requestingUserId);
         if (run.Status == RunStatus.Completed)
-            return MapToDto(run, isCreator);
+            return MapToDto(run, canControl: true);
 
-        FinalizeCurrentItem(run);
-        run.Status = RunStatus.Completed;
-        run.CurrentItemId = null;
-        run.CurrentItemStartedAtUtc = null;
-        run.CompletedAtUtc = Now();
+        var at = TapTime(run, occurredAt);
+        if (run.Items.FirstOrDefault(s => s.PlanItemId == run.CurrentItemId) is { } current)
+            Finish(run, current, at);
+        End(run, at);
 
         await _runRepository.SaveChangesAsync();
 
         _analytics.CapturePracticeRunCompleted(run, requestingUserId);
 
-        return await BroadcastAsync(eventId, run, isCreator);
+        return await BroadcastAsync(eventId, run);
     }
 
-    private void FinalizeCurrentItem(TrainingPlanRun run)
+    public async Task<RunDto> ReopenAsync(Guid eventId, Guid requestingUserId, DateTimeOffset? occurredAt = null)
     {
-        if (run.CurrentItemId == null) return;
-        var current = run.Items.FirstOrDefault(i => i.PlanItemId == run.CurrentItemId);
-        if (current == null) return;
+        var run = await LoadForControlAsync(eventId, requestingUserId);
+        if (run.Status != RunStatus.Completed)
+            return MapToDto(run, canControl: true);
 
-        var now = Now();
-        current.ActualElapsedSeconds = ElapsedSeconds(run, now);
-        current.CompletedAtUtc = now;
+        // The step that was current when the run ended ended with it. A run ended before one clock
+        // read stamped both has only its last started step to go by.
+        var steps = Steps(run);
+        var resumed = steps.FindLast(s => s.CompletedAtUtc is { } ended && ended == run.CompletedAtUtc)
+            ?? steps.FindLast(s => s.StartedAtUtc != null);
+        if (resumed == null)
+            return MapToDto(run, canControl: true);
+
+        var at = TapTime(run, occurredAt);
+        run.CompletedAtUtc = null;
+        Enter(run, resumed, at);
+
+        await _runRepository.SaveChangesAsync();
+        return await BroadcastAsync(eventId, run);
     }
 
-    private static int ElapsedSeconds(TrainingPlanRun run, DateTime now)
+    private static List<TrainingPlanRunItem> Steps(TrainingPlanRun run) =>
+        run.Items.OrderBy(i => i.Order).ToList();
+
+    /// <summary>
+    /// Makes <paramref name="step"/> current and running from the time it already has, so a step
+    /// played before picks up where it stopped and a fresh one starts at zero. It keeps the moment
+    /// it was first entered.
+    /// </summary>
+    private static void Enter(TrainingPlanRun run, TrainingPlanRunItem step, DateTime at)
+    {
+        step.StartedAtUtc ??= at;
+        step.CompletedAtUtc = null;
+
+        run.Status = RunStatus.Running;
+        run.CurrentItemId = step.PlanItemId;
+        run.CurrentItemStartedAtUtc = at.AddSeconds(-step.ActualElapsedSeconds);
+        run.CurrentItemPausedElapsedSeconds = step.ActualElapsedSeconds;
+    }
+
+    /// <summary>Leaves the current step forward, keeping the time it was played.</summary>
+    private static void Finish(TrainingPlanRun run, TrainingPlanRunItem step, DateTime at)
+    {
+        step.ActualElapsedSeconds = ElapsedSeconds(run, at);
+        step.CompletedAtUtc = at;
+    }
+
+    /// <summary>
+    /// Leaves the current step backward: going back says the visit was a mistake, so the step
+    /// returns to never having been played.
+    /// </summary>
+    private static void Discard(TrainingPlanRunItem step)
+    {
+        step.ActualElapsedSeconds = 0;
+        step.StartedAtUtc = null;
+        step.CompletedAtUtc = null;
+    }
+
+    private static void End(TrainingPlanRun run, DateTime at)
+    {
+        run.Status = RunStatus.Completed;
+        run.CurrentItemId = null;
+        run.CurrentItemStartedAtUtc = null;
+        run.CompletedAtUtc = at;
+    }
+
+    private static int ElapsedSeconds(TrainingPlanRun run, DateTime at)
     {
         if (run.Status == RunStatus.Paused || run.CurrentItemStartedAtUtc == null)
             return run.CurrentItemPausedElapsedSeconds;
 
-        var elapsed = (now - run.CurrentItemStartedAtUtc.Value).TotalSeconds;
+        var elapsed = (at - run.CurrentItemStartedAtUtc.Value).TotalSeconds;
         return elapsed < 0 ? 0 : (int)elapsed;
+    }
+
+    /// <summary>
+    /// When a control was tapped, for the clock math. A tap queued offline says when it was made,
+    /// and is believed back to the run's last change — nothing can have happened before that — but
+    /// no further than <see cref="QueuedTapWindow"/>, and never ahead of now.
+    /// </summary>
+    private DateTime TapTime(TrainingPlanRun run, DateTimeOffset? occurredAt)
+    {
+        var now = Now();
+        if (occurredAt is not { } tapped)
+            return now;
+
+        var windowStart = now - QueuedTapWindow;
+        var earliest = run.UpdatedAt > windowStart ? run.UpdatedAt.Value : windowStart;
+        var at = tapped.UtcDateTime < earliest ? earliest : tapped.UtcDateTime;
+        return at > now ? now : at;
     }
 
     /// <summary>
     /// The run, for a caller who may control it. The rule is asked before the run is read, so a
     /// caller who may not control it is refused alike whether or not a session was started.
     /// </summary>
-    private async Task<(TrainingPlanRun run, bool isCreator)> LoadForControlAsync(Guid eventId, Guid requestingUserId)
+    private async Task<TrainingPlanRun> LoadForControlAsync(Guid eventId, Guid requestingUserId)
     {
         await EnsureCanControlAsync(eventId, requestingUserId, await PlanCreatorIdAsync(eventId));
 
-        var run = await _runRepository.GetByEventIdWithDetailsAsync(eventId)
+        return await _runRepository.GetByEventIdWithDetailsAsync(eventId)
             ?? throw new EntityNotFoundException("No run has been started for this event");
-
-        return (run, true);
     }
 
     private IQueryable<TrainingPlan> InstancePlanQuery(Guid eventId) =>
@@ -413,9 +493,10 @@ public class RunService : IRunService
         return plan;
     }
 
-    private async Task<RunDto> BroadcastAsync(Guid eventId, TrainingPlanRun run, bool canControl)
+    /// <summary>Tells every device watching the run; answers the controller who changed it.</summary>
+    private async Task<RunDto> BroadcastAsync(Guid eventId, TrainingPlanRun run)
     {
-        var dto = MapToDto(run, canControl);
+        var dto = MapToDto(run, canControl: true);
         await _broadcaster.BroadcastRunUpdatedAsync(eventId, dto);
         return dto;
     }

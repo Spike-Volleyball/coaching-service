@@ -12,6 +12,9 @@ namespace Coaching.Controllers.V1;
 [Route("v{version:apiVersion}")]
 public class RunController : Shared.Microservices.Controllers.BaseApiController
 {
+    private const string RunControlOnly =
+        "Controls only for whoever may run the session — its plan's creator or an event admin — asked before the run is read, as for every other control";
+
     private readonly IRunService _runService;
 
     public RunController(
@@ -51,18 +54,22 @@ public class RunController : Shared.Microservices.Controllers.BaseApiController
     }
 
     [HttpPost("events/{eventId:guid}/plans/run/pause")]
-    public async Task<IActionResult> PauseRun([FromRoute] Guid eventId)
+    public async Task<IActionResult> PauseRun(
+        [FromRoute] Guid eventId,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] RunTapDto? request)
     {
         CheckIsUserLoggedIn();
-        var run = await _runService.PauseAsync(eventId, JwtPayload.UserId);
+        var run = await _runService.PauseAsync(eventId, JwtPayload.UserId, request?.OccurredAt);
         return Ok(run);
     }
 
     [HttpPost("events/{eventId:guid}/plans/run/resume")]
-    public async Task<IActionResult> ResumeRun([FromRoute] Guid eventId)
+    public async Task<IActionResult> ResumeRun(
+        [FromRoute] Guid eventId,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] RunTapDto? request)
     {
         CheckIsUserLoggedIn();
-        var run = await _runService.ResumeAsync(eventId, JwtPayload.UserId);
+        var run = await _runService.ResumeAsync(eventId, JwtPayload.UserId, request?.OccurredAt);
         return Ok(run);
     }
 
@@ -70,15 +77,38 @@ public class RunController : Shared.Microservices.Controllers.BaseApiController
     public async Task<IActionResult> AdvanceRun([FromRoute] Guid eventId, [FromBody] AdvanceRunDto request)
     {
         CheckIsUserLoggedIn();
-        var run = await _runService.AdvanceAsync(eventId, request.FromItemId, JwtPayload.UserId);
+        var run = await _runService.AdvanceAsync(eventId, request.FromItemId, JwtPayload.UserId, request.OccurredAt);
+        return Ok(run);
+    }
+
+    [HttpPost("events/{eventId:guid}/plans/run/goto")]
+    [NoResourceScope(RunControlOnly)]
+    public async Task<IActionResult> GoToRunItem([FromRoute] Guid eventId, [FromBody] GoToRunDto request)
+    {
+        CheckIsUserLoggedIn();
+        var run = await _runService.GoToAsync(
+            eventId, request.FromItemId, request.ToItemId, JwtPayload.UserId, request.OccurredAt);
         return Ok(run);
     }
 
     [HttpPost("events/{eventId:guid}/plans/run/complete")]
-    public async Task<IActionResult> CompleteRun([FromRoute] Guid eventId)
+    public async Task<IActionResult> CompleteRun(
+        [FromRoute] Guid eventId,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] RunTapDto? request)
     {
         CheckIsUserLoggedIn();
-        var run = await _runService.CompleteAsync(eventId, JwtPayload.UserId);
+        var run = await _runService.CompleteAsync(eventId, JwtPayload.UserId, request?.OccurredAt);
+        return Ok(run);
+    }
+
+    [HttpPost("events/{eventId:guid}/plans/run/reopen")]
+    [NoResourceScope(RunControlOnly)]
+    public async Task<IActionResult> ReopenRun(
+        [FromRoute] Guid eventId,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] RunTapDto? request)
+    {
+        CheckIsUserLoggedIn();
+        var run = await _runService.ReopenAsync(eventId, JwtPayload.UserId, request?.OccurredAt);
         return Ok(run);
     }
 }

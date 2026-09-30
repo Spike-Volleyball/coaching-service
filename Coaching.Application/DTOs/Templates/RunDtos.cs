@@ -68,8 +68,23 @@ public class RunStationItemDto
     public string? Notes { get; set; }
 }
 
-// Body for POST .../run/advance — guards against double-tap / concurrent advance.
-public record AdvanceRunDto(Guid FromItemId);
+/// <summary>
+/// Optional body for POST .../run/pause, /resume, /complete and /reopen. <paramref name="OccurredAt"/>
+/// is when the tap was made, for one queued offline; absent means now.
+/// </summary>
+public record RunTapDto(DateTimeOffset? OccurredAt = null);
+
+/// <summary>
+/// Body for POST .../run/advance. <paramref name="FromItemId"/> is the plan item id the caller saw
+/// current, which guards against a double or stale tap.
+/// </summary>
+public record AdvanceRunDto(Guid FromItemId, DateTimeOffset? OccurredAt = null);
+
+/// <summary>
+/// Body for POST .../run/goto: from the plan item id the caller saw current (guarded as for
+/// advance) to any other of the run's plan item ids.
+/// </summary>
+public record GoToRunDto(Guid FromItemId, Guid ToItemId, DateTimeOffset? OccurredAt = null);
 
 /// <summary>
 /// Optional body for POST .../run/start. A run that is Running or Paused is only started over

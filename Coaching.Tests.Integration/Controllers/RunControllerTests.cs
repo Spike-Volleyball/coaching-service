@@ -514,6 +514,252 @@ public class RunControllerTests
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
+    [Test]
+    public async Task Pause_WithTheTimeItWasTapped_StopsTheClockThen()
+    {
+        // Arrange — two minutes into the first drill; the pause was tapped at 90 seconds, sent
+        // with the phone's own offset.
+        var (eventId, _, _) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+        var entered = DateTime.UtcNow.AddMinutes(-2);
+        await BackdateCurrentItemAsync(eventId, entered);
+        var tapped = new DateTimeOffset(entered.AddSeconds(90)).ToOffset(TimeSpan.FromHours(2));
+
+        // Act
+        var response = await PostJsonAsync($"/v1/events/{eventId}/plans/run/pause",
+            $$"""{ "occurredAt": "{{tapped:yyyy-MM-ddTHH:mm:ss.fffffffzzz}}" }""");
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var run = await response.Content.ReadFromJsonAsync<RunDto>(JsonOptions);
+        run!.Status.Should().Be(RunStatus.Paused);
+        run.CurrentItemPausedElapsedSeconds.Should().Be(90);
+    }
+
+    [Test]
+    public async Task Pause_WithATapTimeFromBeforeTheRunStarted_CountsFromTheStart()
+    {
+        // Arrange
+        var (eventId, _, _) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+
+        // Act
+        var response = await _client.PostAsJsonAsync($"/v1/events/{eventId}/plans/run/pause",
+            new RunTapDto(DateTimeOffset.UtcNow.AddMinutes(-5)), JsonOptions);
+
+        // Assert
+        var run = await response.Content.ReadFromJsonAsync<RunDto>(JsonOptions);
+        run!.CurrentItemPausedElapsedSeconds.Should().Be(0);
+    }
+
+    [Test]
+    public async Task Advance_WhilePaused_LeavesTheRunRunningOnTheNextItem()
+    {
+        // Arrange — the 09-28 session: Next tapped while paused left the next drill paused.
+        var (eventId, item1Id, item2Id) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/pause", null);
+
+        // Act
+        var response = await _client.PostAsJsonAsync($"/v1/events/{eventId}/plans/run/advance", new AdvanceRunDto(item1Id), JsonOptions);
+
+        // Assert
+        var run = await response.Content.ReadFromJsonAsync<RunDto>(JsonOptions);
+        run!.Status.Should().Be(RunStatus.Running);
+        run.CurrentItemId.Should().Be(item2Id);
+        run.CurrentItemStartedAt.Should().NotBeNull();
+    }
+
+    // ---------- Previous, jumps and Resume session ----------
+
+    [Test]
+    public async Task GoTo_ThePreviousItem_ResumesItAndForgetsTheItemLeft()
+    {
+        // Arrange
+        var (eventId, item1Id, item2Id) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+        await _client.PostAsJsonAsync($"/v1/events/{eventId}/plans/run/advance", new AdvanceRunDto(item1Id), JsonOptions);
+        _factory.RunBroadcaster.ClearReceivedCalls();
+
+        // Act
+        var response = await _client.PostAsJsonAsync(
+            $"/v1/events/{eventId}/plans/run/goto", new GoToRunDto(item2Id, item1Id), JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var run = await response.Content.ReadFromJsonAsync<RunDto>(JsonOptions);
+        run!.Status.Should().Be(RunStatus.Running);
+        run.CurrentItemId.Should().Be(item1Id);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<CoachingDbContext>();
+        var rows = await db.TrainingPlanRunItems.AsNoTracking().ToListAsync();
+        var resumed = rows.Single(r => r.PlanItemId == item1Id);
+        resumed.CompletedAtUtc.Should().BeNull();
+        resumed.StartedAtUtc.Should().NotBeNull();
+        var left = rows.Single(r => r.PlanItemId == item2Id);
+        left.StartedAtUtc.Should().BeNull();
+        left.CompletedAtUtc.Should().BeNull();
+        left.ActualElapsedSeconds.Should().Be(0);
+        await _factory.RunBroadcaster.Received(1)
+            .BroadcastRunUpdatedAsync(eventId, Arg.Is<RunDto>(d => d.CurrentItemId == item1Id));
+    }
+
+    [Test]
+    public async Task GoTo_FromAnItemThatIsNoLongerCurrent_LeavesTheRunUnchanged()
+    {
+        // Arrange
+        var (eventId, item1Id, item2Id) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+
+        // Act
+        var response = await _client.PostAsJsonAsync(
+            $"/v1/events/{eventId}/plans/run/goto", new GoToRunDto(item2Id, item1Id), JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var run = await response.Content.ReadFromJsonAsync<RunDto>(JsonOptions);
+        run!.CurrentItemId.Should().Be(item1Id);
+    }
+
+    [Test]
+    public async Task GoTo_AsParticipant_Returns403()
+    {
+        // Arrange
+        var (eventId, item1Id, item2Id) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+        StubParticipant(eventId);
+        SetAuth(OtherUserId);
+
+        // Act
+        var response = await _client.PostAsJsonAsync(
+            $"/v1/events/{eventId}/plans/run/goto", new GoToRunDto(item1Id, item2Id), JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Test]
+    public async Task GoTo_NoRun_Returns404()
+    {
+        // Arrange
+        var (eventId, item1Id, item2Id) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+
+        // Act
+        var response = await _client.PostAsJsonAsync(
+            $"/v1/events/{eventId}/plans/run/goto", new GoToRunDto(item1Id, item2Id), JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Test]
+    public async Task GoTo_Unauthenticated_Returns401()
+    {
+        // Arrange
+        var (eventId, item1Id, item2Id) = await SeedPlanWithTwoItemsAsync();
+
+        // Act
+        var response = await _client.PostAsJsonAsync(
+            $"/v1/events/{eventId}/plans/run/goto", new GoToRunDto(item1Id, item2Id), JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Test]
+    public async Task Reopen_AfterEndSession_ResumesTheItemItEndedOn()
+    {
+        // Arrange — End Session tapped by mistake on the second drill.
+        var (eventId, item1Id, item2Id) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+        await _client.PostAsJsonAsync($"/v1/events/{eventId}/plans/run/advance", new AdvanceRunDto(item1Id), JsonOptions);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/complete", null);
+
+        // Act
+        var response = await _client.PostAsync($"/v1/events/{eventId}/plans/run/reopen", null);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var run = await response.Content.ReadFromJsonAsync<RunDto>(JsonOptions);
+        run!.Status.Should().Be(RunStatus.Running);
+        run.CompletedAt.Should().BeNull();
+        run.CurrentItemId.Should().Be(item2Id);
+        run.Items.Single(i => i.PlanItemId == item2Id).CompletedAt.Should().BeNull();
+        (await GetRunAsync(eventId)).Status.Should().Be(RunStatus.Running);
+    }
+
+    [Test]
+    public async Task Reopen_ARunStillGoing_LeavesItAlone()
+    {
+        // Arrange
+        var (eventId, item1Id, _) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+
+        // Act
+        var response = await _client.PostAsync($"/v1/events/{eventId}/plans/run/reopen", null);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var run = await response.Content.ReadFromJsonAsync<RunDto>(JsonOptions);
+        run!.Status.Should().Be(RunStatus.Running);
+        run.CurrentItemId.Should().Be(item1Id);
+    }
+
+    [Test]
+    public async Task Reopen_AsParticipant_Returns403()
+    {
+        // Arrange
+        var (eventId, _, _) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/complete", null);
+        StubParticipant(eventId);
+        SetAuth(OtherUserId);
+
+        // Act
+        var response = await _client.PostAsync($"/v1/events/{eventId}/plans/run/reopen", null);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Test]
+    public async Task Reopen_NoRun_Returns404()
+    {
+        // Arrange
+        var (eventId, _, _) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+
+        // Act
+        var response = await _client.PostAsync($"/v1/events/{eventId}/plans/run/reopen", null);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Test]
+    public async Task Reopen_Unauthenticated_Returns401()
+    {
+        // Arrange
+        var (eventId, _, _) = await SeedPlanWithTwoItemsAsync();
+
+        // Act
+        var response = await _client.PostAsync($"/v1/events/{eventId}/plans/run/reopen", null);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
     // ---------- Stations ----------
 
     [Test]
@@ -703,6 +949,24 @@ public class RunControllerTests
         _factory.EventsGrpcClient.IsEventParticipantAsync(eventId, userId).Returns((false, true));
         _factory.EventsGrpcClient.IsEventAdminAsync(eventId, userId).Returns(true);
     }
+
+    /// <summary>
+    /// Makes the current item's clock — and the run's last change — read as started at
+    /// <paramref name="entered"/>. Written past SaveChanges, which stamps UpdatedAt itself.
+    /// </summary>
+    private async Task BackdateCurrentItemAsync(Guid eventId, DateTime entered)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<CoachingDbContext>();
+        await db.TrainingPlanRuns
+            .Where(r => r.EventId == eventId)
+            .ExecuteUpdateAsync(set => set
+                .SetProperty(r => r.CurrentItemStartedAtUtc, entered)
+                .SetProperty(r => r.UpdatedAt, entered));
+    }
+
+    private Task<HttpResponseMessage> PostJsonAsync(string url, string json) =>
+        _client.PostAsync(url, new StringContent(json, Encoding.UTF8, "application/json"));
 
     /// <summary>The run as the current caller reads it.</summary>
     private async Task<RunDto> GetRunAsync(Guid eventId)

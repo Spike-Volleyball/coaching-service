@@ -25,15 +25,31 @@ public interface IRunService
     /// </summary>
     Task<RunDto> StartAsync(Guid eventId, Guid requestingUserId, bool restart = false);
 
+    // Every control operation below takes occurredAt: when the tap was made, for a tap queued
+    // offline that reaches the server late. Null means now. Item ids are plan item ids — the
+    // same ids as the run's CurrentItemId.
+
     /// <summary>Capture elapsed, set Paused.</summary>
-    Task<RunDto> PauseAsync(Guid eventId, Guid requestingUserId);
+    Task<RunDto> PauseAsync(Guid eventId, Guid requestingUserId, DateTimeOffset? occurredAt = null);
 
     /// <summary>Re-anchor the virtual start, set Running.</summary>
-    Task<RunDto> ResumeAsync(Guid eventId, Guid requestingUserId);
+    Task<RunDto> ResumeAsync(Guid eventId, Guid requestingUserId, DateTimeOffset? occurredAt = null);
 
-    /// <summary>Finalize the current item and move to the next (or complete). fromItemId guards concurrent advance.</summary>
-    Task<RunDto> AdvanceAsync(Guid eventId, Guid fromItemId, Guid requestingUserId);
+    /// <summary>
+    /// Finish the current item and enter the next by order, running — or complete the run after
+    /// the last. fromItemId guards against a double or stale tap.
+    /// </summary>
+    Task<RunDto> AdvanceAsync(Guid eventId, Guid fromItemId, Guid requestingUserId, DateTimeOffset? occurredAt = null);
 
-    /// <summary>Finalize the current item and set Completed.</summary>
-    Task<RunDto> CompleteAsync(Guid eventId, Guid requestingUserId);
+    /// <summary>
+    /// Leave the current item for any other, running. Going back discards the visit to the item
+    /// left; going forward finishes it. fromItemId guards as for advance.
+    /// </summary>
+    Task<RunDto> GoToAsync(Guid eventId, Guid fromItemId, Guid toItemId, Guid requestingUserId, DateTimeOffset? occurredAt = null);
+
+    /// <summary>Finish the current item and set Completed.</summary>
+    Task<RunDto> CompleteAsync(Guid eventId, Guid requestingUserId, DateTimeOffset? occurredAt = null);
+
+    /// <summary>Take a Completed run back to Running on the item it ended on, from that item's time.</summary>
+    Task<RunDto> ReopenAsync(Guid eventId, Guid requestingUserId, DateTimeOffset? occurredAt = null);
 }
