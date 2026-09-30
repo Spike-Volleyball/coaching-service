@@ -117,7 +117,7 @@ public class RunController : Shared.Microservices.Controllers.BaseApiController
     public async Task<IActionResult> SetRunAutoAdvance([FromRoute] Guid eventId, [FromBody] RunAutoAdvanceDto request)
     {
         CheckIsUserLoggedIn();
-        var run = await _runService.SetAutoAdvanceAsync(eventId, request.Enabled!.Value, JwtPayload.UserId);
+        var run = await _runService.SetAutoAdvanceAsync(eventId, request.Enabled!.Value, JwtPayload.UserId, request.OccurredAt);
         return Ok(run);
     }
 }

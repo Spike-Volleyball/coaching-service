@@ -982,6 +982,28 @@ public class RunControllerTests
     }
 
     [Test]
+    public async Task SetAutoAdvance_OnQueuedOffline_MovesOnFromWhenItWasTapped()
+    {
+        // Arrange — 30 seconds past the first item's five minutes; the switch was tapped 20 seconds
+        // ago and sent with the phone's own offset.
+        var (eventId, _, item2Id) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+        await BackdateCurrentItemAsync(eventId, DateTime.UtcNow.AddSeconds(-330));
+        var tapped = new DateTimeOffset(DateTime.UtcNow.AddSeconds(-20)).ToOffset(TimeSpan.FromHours(2));
+
+        // Act
+        var response = await PostJsonAsync($"/v1/events/{eventId}/plans/run/auto-advance",
+            $$"""{ "enabled": true, "occurredAt": "{{tapped:yyyy-MM-ddTHH:mm:ss.fffffffzzz}}" }""");
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var run = await response.Content.ReadFromJsonAsync<RunDto>(JsonOptions);
+        run!.CurrentItemId.Should().Be(item2Id);
+        run.CurrentItemStartedAt.Should().BeCloseTo(tapped.UtcDateTime, TimeSpan.FromMilliseconds(1));
+    }
+
+    [Test]
     public async Task SetAutoAdvance_OnWhilePausedInOvertime_LeavesItPausedAndTheResumeMovesOn()
     {
         // Arrange — paused ten seconds past the first item's five minutes, by hand.

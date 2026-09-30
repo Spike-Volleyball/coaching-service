@@ -400,14 +400,16 @@ public class RunService : IRunService
         return await CommitAsync(eventId, run, movedOn);
     }
 
-    public async Task<RunDto> SetAutoAdvanceAsync(Guid eventId, bool enabled, Guid requestingUserId)
+    public async Task<RunDto> SetAutoAdvanceAsync(
+        Guid eventId, bool enabled, Guid requestingUserId, DateTimeOffset? occurredAt = null)
     {
         var (run, movedOn) = await LoadForControlAsync(eventId, requestingUserId);
         if (run.AutoAdvance == enabled)
             return MapToDto(run, canControl: true);
 
         run.AutoAdvance = enabled;
-        return await CommitAsync(eventId, run, [.. movedOn, .. RunAutoAdvance.Arm(run, Now())]);
+        var at = TapTime(run, movedOn, occurredAt);
+        return await CommitAsync(eventId, run, [.. movedOn, .. RunAutoAdvance.Arm(run, at)]);
     }
 
     public async Task<IReadOnlyList<Guid>> GetRunIdsDueToAutoAdvanceAsync(CancellationToken cancellationToken) =>

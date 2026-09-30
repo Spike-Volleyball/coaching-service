@@ -65,9 +65,9 @@ public interface IRunService
     /// <summary>
     /// Whether the run moves on by itself when a step's time is up, from now on. Any status; a
     /// run already so set is returned unchanged. Switched on while running with the step's time
-    /// already up, the run moves on now.
+    /// already up, the run moves on at the tap.
     /// </summary>
-    Task<RunDto> SetAutoAdvanceAsync(Guid eventId, bool enabled, Guid requestingUserId);
+    Task<RunDto> SetAutoAdvanceAsync(Guid eventId, bool enabled, Guid requestingUserId, DateTimeOffset? occurredAt = null);
 
     // The auto-advance sweep's two halves, for runs nobody is reading. No caller, so no rule:
     // what moves is only what the run's own setting says.

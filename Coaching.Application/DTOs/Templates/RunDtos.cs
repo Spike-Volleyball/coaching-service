@@ -108,9 +108,10 @@ public record StartRunDto(bool Restart = false, bool? AutoAdvance = null);
 
 /// <summary>
 /// Body for POST .../run/auto-advance: whether the run moves on by itself from now on. Required,
-/// so a body that says nothing is refused rather than read as off.
+/// so a body that says nothing is refused rather than read as off. <paramref name="OccurredAt"/> is
+/// when the switch was tapped, for one queued offline, as for the other controls; absent means now.
 /// </summary>
-public record RunAutoAdvanceDto([Required] bool? Enabled);
+public record RunAutoAdvanceDto([Required] bool? Enabled, DateTimeOffset? OccurredAt = null);
 
 /// <summary>What the caller may do with an event's run, answerable before any run exists.</summary>
 public record RunPermissionsDto(bool CanControl);

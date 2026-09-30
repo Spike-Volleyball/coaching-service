@@ -452,6 +452,43 @@ public class RunAutoAdvanceControlTests : RunServiceTestBase
     }
 
     [Test]
+    public async Task SetAutoAdvanceAsync_OnQueuedOffline_MovesOnFromWhenItWasTapped()
+    {
+        // Arrange — step 1 is 30 seconds over its five minutes; the switch was tapped 20 seconds
+        // ago on a phone with no signal, when it was ten seconds over.
+        StubRun(RunningOn(Step1Id, elapsedSeconds: 330));
+        var tapped = Now.AddSeconds(-20);
+
+        // Act
+        var result = await _sut.SetAutoAdvanceAsync(EventId, enabled: true, CreatorId, occurredAt: tapped);
+
+        // Assert — not from when it reached the server
+        result.CurrentItemId.Should().Be(Step2Id);
+        result.CurrentItemStartedAt.Should().Be(tapped);
+
+        var left = result.Items.Single(i => i.PlanItemId == Step1Id);
+        left.ActualElapsedSeconds.Should().Be(310);
+        left.CompletedAt.Should().Be(tapped);
+    }
+
+    [Test]
+    public async Task SetAutoAdvanceAsync_OnQueuedFromBeforeTheRunsLastChange_CountsFromThatChange()
+    {
+        // Arrange — step 1 was entered 330 seconds ago; a switch claiming ten minutes ago cannot
+        // have been made on it. Counted from its entry, auto-advance was on when its time ran out,
+        // 30 seconds ago, and moved it on then.
+        StubRun(RunningOn(Step1Id, elapsedSeconds: 330));
+
+        // Act
+        var result = await _sut.SetAutoAdvanceAsync(EventId, enabled: true, CreatorId, occurredAt: Now.AddMinutes(-10));
+
+        // Assert
+        result.CurrentItemId.Should().Be(Step2Id);
+        result.CurrentItemStartedAt.Should().Be(Now.AddSeconds(-30));
+        result.Items.Single(i => i.PlanItemId == Step1Id).ActualElapsedSeconds.Should().Be(300);
+    }
+
+    [Test]
     public async Task SetAutoAdvanceAsync_OnWithTimeLeft_LeavesTheStepRunning()
     {
         // Arrange
