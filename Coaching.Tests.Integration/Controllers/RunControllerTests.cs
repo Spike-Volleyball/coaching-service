@@ -10,6 +10,7 @@ using Coaching.Application.Interfaces.Services;
 using Coaching.Domain.Enums;
 using Coaching.Domain.Models.Drills;
 using Coaching.Domain.Models.Templates;
+using Coaching.Hubs;
 using Coaching.Infrastructure.Data.Context;
 using Coaching.Tests.Integration.Fixtures;
 using FluentAssertions;
@@ -758,6 +759,22 @@ public class RunControllerTests
 
         // Assert
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    // ---------- Realtime ----------
+
+    [Test]
+    public void TheRunHub_IsBuiltFromTheContainerAsSignalRBuildsIt()
+    {
+        // Arrange — the unit tests build it by hand, so a dependency the container lacks would
+        // only show as every JoinRun failing.
+        using var scope = _factory.Services.CreateScope();
+
+        // Act
+        var act = () => ActivatorUtilities.CreateInstance<TrainingRunHub>(scope.ServiceProvider);
+
+        // Assert
+        act.Should().NotThrow();
     }
 
     // ---------- Stations ----------

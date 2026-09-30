@@ -26,6 +26,14 @@ public class RunDto
     public bool CanControl { get; set; }
 
     public List<RunItemDto> Items { get; set; } = new();
+
+    /// <summary>The same run as told to someone who may, or may not, control it.</summary>
+    public RunDto WithCanControl(bool canControl)
+    {
+        var copy = (RunDto)MemberwiseClone();
+        copy.CanControl = canControl;
+        return copy;
+    }
 }
 
 public class RunItemDto

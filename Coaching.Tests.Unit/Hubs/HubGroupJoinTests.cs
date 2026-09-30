@@ -67,31 +67,69 @@ public class HubGroupJoinTests : UnitTestBase
     }
 
     [Test]
-    public async Task JoinRun_ARunTheCallerMayWatch_JoinsItsRoom()
+    public async Task JoinRun_ACallerWhoMayControlTheRun_JoinsTheControllersRoomOnly()
     {
         // Arrange
+        _runs.CanAsync(_userId, _resourceId, RunAccess.Control, Arg.Any<CancellationToken>()).Returns(true);
         _runs.CanAsync(_userId, _resourceId, RunAccess.Read, Arg.Any<CancellationToken>()).Returns(true);
 
         // Act
-        await Signed(new TrainingRunHub(Services())).JoinRun(_resourceId);
+        await Signed(RunHub()).JoinRun(_resourceId);
 
         // Assert
-        await _groups.Received(1).AddToGroupAsync("connection-1", TrainingRunHub.GroupName(_resourceId), Arg.Any<CancellationToken>());
+        await _groups.Received(1).AddToGroupAsync("connection-1", TrainingRunHub.ControllersGroup(_resourceId), Arg.Any<CancellationToken>());
+        await _groups.DidNotReceive().AddToGroupAsync(Arg.Any<string>(), TrainingRunHub.ViewersGroup(_resourceId), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task JoinRun_ACallerWhoMayOnlyWatch_JoinsTheViewersRoomOnly()
+    {
+        // Arrange — a player: every phone watching got the coach's controls on 09-28.
+        _runs.CanAsync(_userId, _resourceId, RunAccess.Control, Arg.Any<CancellationToken>()).Returns(false);
+        _runs.CanAsync(_userId, _resourceId, RunAccess.Read, Arg.Any<CancellationToken>()).Returns(true);
+
+        // Act
+        await Signed(RunHub()).JoinRun(_resourceId);
+
+        // Assert
+        await _groups.Received(1).AddToGroupAsync("connection-1", TrainingRunHub.ViewersGroup(_resourceId), Arg.Any<CancellationToken>());
+        await _groups.DidNotReceive().AddToGroupAsync(Arg.Any<string>(), TrainingRunHub.ControllersGroup(_resourceId), Arg.Any<CancellationToken>());
     }
 
     [Test]
     public async Task JoinRun_ARunTheCallerMayNotWatch_IsRefusedAndJoinsNothing()
     {
         // Arrange
-        _runs.CanAsync(_userId, _resourceId, RunAccess.Read, Arg.Any<CancellationToken>()).Returns(false);
+        _runs.CanAsync(_userId, _resourceId, Arg.Any<RunAccess>(), Arg.Any<CancellationToken>()).Returns(false);
 
         // Act
-        var act = () => Signed(new TrainingRunHub(Services())).JoinRun(_resourceId);
+        var act = () => Signed(RunHub()).JoinRun(_resourceId);
 
         // Assert
         await act.Should().ThrowAsync<HubException>();
         await _groups.DidNotReceiveWithAnyArgs().AddToGroupAsync(default!, default!, default);
     }
+
+    [Test]
+    public async Task LeaveRun_LeavesWhicheverRoomTheCallerWasIn()
+    {
+        // Act
+        await Signed(RunHub()).LeaveRun(_resourceId);
+
+        // Assert
+        await _groups.Received(1).RemoveFromGroupAsync("connection-1", TrainingRunHub.ControllersGroup(_resourceId), Arg.Any<CancellationToken>());
+        await _groups.Received(1).RemoveFromGroupAsync("connection-1", TrainingRunHub.ViewersGroup(_resourceId), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void TheRunRooms_AreNamedPerEventAndAudience()
+    {
+        // Assert
+        TrainingRunHub.ControllersGroup(_resourceId).Should().Be($"run:{_resourceId}:controllers");
+        TrainingRunHub.ViewersGroup(_resourceId).Should().Be($"run:{_resourceId}:viewers");
+    }
+
+    private TrainingRunHub RunHub() => new(Services(), _runs, new JwtPayloadProvider());
 
     private IServiceProvider Services() =>
         new ServiceCollection()
