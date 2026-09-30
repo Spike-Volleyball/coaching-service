@@ -1,6 +1,7 @@
 using Coaching.Application.RichText;
 using Coaching.Domain.Enums;
 using FluentAssertions;
+using Shared.Testing.Base;
 
 namespace Coaching.Tests.Unit.RichText;
 
@@ -11,7 +12,7 @@ namespace Coaching.Tests.Unit.RichText;
 /// </summary>
 [TestFixture]
 [Category("Unit")]
-public class ImportedProseTests
+public class ImportedProseTests : UnitTestBase
 {
     private const string VariationsHtml =
         "<ol><li><p>Split into 2 teams</p></li>" +
