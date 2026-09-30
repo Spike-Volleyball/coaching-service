@@ -58,7 +58,13 @@ public class RunService : IRunService
         var canControl = isCreator || await EnsureCanReadRunAsync(eventId, requestingUserId);
 
         var run = await _runRepository.GetByEventIdWithDetailsAsync(eventId);
-        return run == null ? null : MapToDto(run, canControl);
+        if (run == null)
+            return null;
+
+        // A step whose time ran out on a run moving on by itself has been left, whether or not the
+        // sweep has written it yet. A read never writes; the sweep, or the next control, does.
+        RunAutoAdvance.CatchUp(run, Now());
+        return MapToDto(run, canControl);
     }
 
     /// <summary>
@@ -109,7 +115,7 @@ public class RunService : IRunService
         return (eventExists, eventExists && (isParticipant || await _eventsGrpcClient.IsEventAdminAsync(eventId, userId)));
     }
 
-    public async Task<RunDto> StartAsync(Guid eventId, Guid requestingUserId, bool restart = false)
+    public async Task<RunDto> StartAsync(Guid eventId, Guid requestingUserId, bool restart = false, bool? autoAdvance = null)
     {
         var plan = await GetInstancePlanOrThrowAsync(eventId);
         await EnsureCanControlAsync(eventId, requestingUserId, plan.CreatedByUserId);
@@ -208,9 +214,14 @@ public class RunService : IRunService
         run.CurrentItemStartedAtUtc = firstItem != null ? now : null;
         run.CurrentItemPausedElapsedSeconds = 0;
 
+        // Unsaid, a new run starts without it and a run started over keeps it: the builds in the
+        // field know nothing of auto-advance, and their Start Over must not switch it off.
+        if (autoAdvance is { } moveOnByItself)
+            run.AutoAdvance = moveOnByItself;
+
         // A restart is a start: the coach is running the practice again, and the run rows were
         // just reset to the plan as it stands now.
-        return await CommitAsync(eventId, run, () =>
+        return await CommitAsync(eventId, run, movedOn: [], () =>
             _analytics.Capture(requestingUserId, AnalyticsEventNames.PracticeRunStarted, new Dictionary<string, object?>
             {
                 ["event_id"] = eventId,
@@ -273,40 +284,40 @@ public class RunService : IRunService
 
     public async Task<RunDto> PauseAsync(Guid eventId, Guid requestingUserId, DateTimeOffset? occurredAt = null)
     {
-        var run = await LoadForControlAsync(eventId, requestingUserId);
+        var (run, movedOn) = await LoadForControlAsync(eventId, requestingUserId);
         if (run.Status != RunStatus.Running)
             return MapToDto(run, canControl: true);
 
-        run.CurrentItemPausedElapsedSeconds = RunSteps.ElapsedSeconds(run, TapTime(run, occurredAt));
+        run.CurrentItemPausedElapsedSeconds = RunSteps.ElapsedSeconds(run, TapTime(run, movedOn, occurredAt));
         run.CurrentItemStartedAtUtc = null;
         run.Status = RunStatus.Paused;
 
-        return await CommitAsync(eventId, run);
+        return await CommitAsync(eventId, run, movedOn);
     }
 
     public async Task<RunDto> ResumeAsync(Guid eventId, Guid requestingUserId, DateTimeOffset? occurredAt = null)
     {
-        var run = await LoadForControlAsync(eventId, requestingUserId);
+        var (run, movedOn) = await LoadForControlAsync(eventId, requestingUserId);
         if (run.Status != RunStatus.Paused)
             return MapToDto(run, canControl: true);
 
-        run.CurrentItemStartedAtUtc = TapTime(run, occurredAt).AddSeconds(-run.CurrentItemPausedElapsedSeconds);
+        run.CurrentItemStartedAtUtc = TapTime(run, movedOn, occurredAt).AddSeconds(-run.CurrentItemPausedElapsedSeconds);
         run.Status = RunStatus.Running;
 
-        return await CommitAsync(eventId, run);
+        return await CommitAsync(eventId, run, movedOn);
     }
 
     public async Task<RunDto> AdvanceAsync(Guid eventId, Guid fromItemId, Guid requestingUserId, DateTimeOffset? occurredAt = null)
     {
-        var run = await LoadForControlAsync(eventId, requestingUserId);
+        var (run, movedOn) = await LoadForControlAsync(eventId, requestingUserId);
         var steps = RunSteps.InOrder(run);
         var from = steps.FindIndex(s => s.PlanItemId == fromItemId);
 
-        // A double tap, or one queued on a screen that has since moved on.
+        // A double tap, or one queued on a screen that has since moved on — by hand, or by itself.
         if (run.CurrentItemId != fromItemId || from < 0)
             return MapToDto(run, canControl: true);
 
-        var at = TapTime(run, occurredAt);
+        var at = TapTime(run, movedOn, occurredAt);
         var played = RunSteps.ElapsedSeconds(run, at);
         var left = steps[from];
         RunSteps.Finish(left, played, at);
@@ -319,7 +330,7 @@ public class RunService : IRunService
 
         // Advancing off the end of the plan is the run finishing, and that is the same fact the
         // finish button records — so it is the same event, once, from whichever path got there.
-        return await CommitAsync(eventId, run, () =>
+        return await CommitAsync(eventId, run, movedOn, () =>
         {
             if (next == null)
                 _analytics.CapturePracticeRunCompleted(run, requestingUserId);
@@ -330,7 +341,7 @@ public class RunService : IRunService
 
     public async Task<RunDto> GoToAsync(Guid eventId, Guid fromItemId, Guid toItemId, Guid requestingUserId, DateTimeOffset? occurredAt = null)
     {
-        var run = await LoadForControlAsync(eventId, requestingUserId);
+        var (run, movedOn) = await LoadForControlAsync(eventId, requestingUserId);
         var steps = RunSteps.InOrder(run);
         var from = steps.FindIndex(s => s.PlanItemId == fromItemId);
         var to = steps.FindIndex(s => s.PlanItemId == toItemId);
@@ -340,7 +351,7 @@ public class RunService : IRunService
         if (run.CurrentItemId != fromItemId || from < 0 || to < 0 || to == from)
             return MapToDto(run, canControl: true);
 
-        var at = TapTime(run, occurredAt);
+        var at = TapTime(run, movedOn, occurredAt);
         var played = RunSteps.ElapsedSeconds(run, at);
         var (left, target) = (steps[from], steps[to]);
         if (to < from)
@@ -349,27 +360,27 @@ public class RunService : IRunService
             RunSteps.Finish(left, played, at);
         RunSteps.Enter(run, target, at);
 
-        return await CommitAsync(eventId, run, () =>
+        return await CommitAsync(eventId, run, movedOn, () =>
             _analytics.CapturePracticeRunStepChanged(run, left, target, Direction(from, to), played, requestingUserId));
     }
 
     public async Task<RunDto> CompleteAsync(Guid eventId, Guid requestingUserId, DateTimeOffset? occurredAt = null)
     {
-        var run = await LoadForControlAsync(eventId, requestingUserId);
+        var (run, movedOn) = await LoadForControlAsync(eventId, requestingUserId);
         if (run.Status == RunStatus.Completed)
             return MapToDto(run, canControl: true);
 
-        var at = TapTime(run, occurredAt);
+        var at = TapTime(run, movedOn, occurredAt);
         if (run.Items.FirstOrDefault(s => s.PlanItemId == run.CurrentItemId) is { } current)
             RunSteps.Finish(current, RunSteps.ElapsedSeconds(run, at), at);
         RunSteps.End(run, at);
 
-        return await CommitAsync(eventId, run, () => _analytics.CapturePracticeRunCompleted(run, requestingUserId));
+        return await CommitAsync(eventId, run, movedOn, () => _analytics.CapturePracticeRunCompleted(run, requestingUserId));
     }
 
     public async Task<RunDto> ReopenAsync(Guid eventId, Guid requestingUserId, DateTimeOffset? occurredAt = null)
     {
-        var run = await LoadForControlAsync(eventId, requestingUserId);
+        var (run, movedOn) = await LoadForControlAsync(eventId, requestingUserId);
         if (run.Status != RunStatus.Completed)
             return MapToDto(run, canControl: true);
 
@@ -381,11 +392,21 @@ public class RunService : IRunService
         if (resumed == null)
             return MapToDto(run, canControl: true);
 
-        var at = TapTime(run, occurredAt);
+        var at = TapTime(run, movedOn, occurredAt);
         run.CompletedAtUtc = null;
         RunSteps.Enter(run, resumed, at);
 
-        return await CommitAsync(eventId, run);
+        return await CommitAsync(eventId, run, movedOn);
+    }
+
+    public async Task<RunDto> SetAutoAdvanceAsync(Guid eventId, bool enabled, Guid requestingUserId)
+    {
+        var (run, movedOn) = await LoadForControlAsync(eventId, requestingUserId);
+        if (run.AutoAdvance == enabled)
+            return MapToDto(run, canControl: true);
+
+        run.AutoAdvance = enabled;
+        return await CommitAsync(eventId, run, movedOn);
     }
 
     /// <summary>A move to the neighbouring step either way, or past it, by position in the run.</summary>
@@ -399,30 +420,38 @@ public class RunService : IRunService
     /// <summary>
     /// When a control was tapped, for the clock math. A tap queued offline says when it was made,
     /// and is believed back to the run's last change — nothing can have happened before that — but
-    /// no further than <see cref="QueuedTapWindow"/>, and never ahead of now.
+    /// no further than <see cref="QueuedTapWindow"/>, and never ahead of now. The last change is the
+    /// run's last save, or a step it has just been moved through by itself (<paramref name="movedOn"/>)
+    /// that no save has recorded yet.
     /// </summary>
-    private DateTime TapTime(TrainingPlanRun run, DateTimeOffset? occurredAt)
+    private DateTime TapTime(TrainingPlanRun run, IReadOnlyList<AutoAdvancedStep> movedOn, DateTimeOffset? occurredAt)
     {
         var now = Now();
         if (occurredAt is not { } tapped)
             return now;
 
+        var lastChange = movedOn.Select(step => (DateTime?)step.At).Append(run.UpdatedAt).Max();
         var windowStart = now - QueuedTapWindow;
-        var earliest = run.UpdatedAt > windowStart ? run.UpdatedAt.Value : windowStart;
+        var earliest = lastChange > windowStart ? lastChange.Value : windowStart;
         var at = tapped.UtcDateTime < earliest ? earliest : tapped.UtcDateTime;
         return at > now ? now : at;
     }
 
     /// <summary>
     /// The run, for a caller who may control it. The rule is asked before the run is read, so a
-    /// caller who may not control it is refused alike whether or not a session was started.
+    /// caller who may not control it is refused alike whether or not a session was started. It
+    /// comes as it stands now: a run moving on by itself is first moved past every step whose time
+    /// ran out (<c>MovedOn</c>), so a tap is judged against the step the run is on, and those moves
+    /// are saved with the control's own write, if it makes one.
     /// </summary>
-    private async Task<TrainingPlanRun> LoadForControlAsync(Guid eventId, Guid requestingUserId)
+    private async Task<(TrainingPlanRun Run, IReadOnlyList<AutoAdvancedStep> MovedOn)> LoadForControlAsync(
+        Guid eventId, Guid requestingUserId)
     {
         await EnsureCanControlAsync(eventId, requestingUserId, await PlanCreatorIdAsync(eventId));
 
-        return await _runRepository.GetByEventIdWithDetailsAsync(eventId)
+        var run = await _runRepository.GetByEventIdWithDetailsAsync(eventId)
             ?? throw new EntityNotFoundException("No run has been started for this event");
+        return (run, RunAutoAdvance.CatchUp(run, Now()));
     }
 
     private IQueryable<TrainingPlan> InstancePlanQuery(Guid eventId) =>
@@ -452,8 +481,17 @@ public class RunService : IRunService
     /// told what the run is now — the answer a stale tap gets. <paramref name="saved"/> records
     /// what only a write that landed may.
     /// </summary>
-    private async Task<RunDto> CommitAsync(Guid eventId, TrainingPlanRun run, Action? saved = null)
+    /// <param name="movedOn">
+    /// The steps the run moved through by itself before the control acted, saved with it. The run
+    /// is caught up again before the save, since the write itself can leave it due — a step entered
+    /// with its time already used, auto-advance switched on in overtime — and no reply or broadcast
+    /// may show a step the run has left.
+    /// </param>
+    private async Task<RunDto> CommitAsync(
+        Guid eventId, TrainingPlanRun run, IReadOnlyList<AutoAdvancedStep> movedOn, Action? saved = null)
     {
+        var movedOnAfter = RunAutoAdvance.CatchUp(run, Now());
+
         try
         {
             await _runRepository.SaveChangesAsync();
@@ -463,14 +501,30 @@ public class RunService : IRunService
         {
             var current = await _runRepository.GetByEventIdWithDetailsNoTrackingAsync(eventId)
                 ?? throw new EntityNotFoundException("No run has been started for this event");
+            RunAutoAdvance.CatchUp(current, Now());
             return MapToDto(current, canControl: true);
         }
 
+        CaptureMovedOn(run, movedOn);
         saved?.Invoke();
+        CaptureMovedOn(run, movedOnAfter);
 
         var dto = MapToDto(run, canControl: true);
         await _broadcaster.BroadcastRunUpdatedAsync(eventId, dto);
         return dto;
+    }
+
+    /// <summary>
+    /// Counts each step the run moved through by itself, once it is saved. Nobody tapped, so each
+    /// is counted against whoever started the session.
+    /// </summary>
+    private void CaptureMovedOn(TrainingPlanRun run, IReadOnlyList<AutoAdvancedStep> movedOn)
+    {
+        foreach (var step in movedOn)
+        {
+            _analytics.CapturePracticeRunStepChanged(
+                run, step.From, step.To, RunStepDirection.Auto, step.From.PlannedDurationSeconds, run.StartedByUserId);
+        }
     }
 
     private RunDto MapToDto(TrainingPlanRun run, bool canControl) => new()
@@ -485,6 +539,7 @@ public class RunService : IRunService
         CurrentItemPausedElapsedSeconds = run.CurrentItemPausedElapsedSeconds,
         StartedAt = run.StartedAtUtc,
         CompletedAt = run.CompletedAtUtc,
+        AutoAdvance = run.AutoAdvance,
         ServerTime = Now(),
         CanControl = canControl,
         Items = run.Items

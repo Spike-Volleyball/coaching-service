@@ -36,11 +36,13 @@ public static class DrillSaveKind
 
 /// <summary>
 /// How a <c>practice_run_step_changed</c> moved: to the neighbouring step either way, or past it.
-/// Counted by position in the run, so a gap in the plan's numbering is not a jump.
+/// Counted by position in the run, so a gap in the plan's numbering is not a jump. Auto is the
+/// run moving on by itself when a step's time was up, which nobody tapped.
 /// </summary>
 public static class RunStepDirection
 {
     public const string Next = "next";
     public const string Previous = "previous";
     public const string Jump = "jump";
+    public const string Auto = "auto";
 }

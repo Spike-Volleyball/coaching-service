@@ -761,6 +761,227 @@ public class RunControllerTests
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
+    // ---------- Auto-advance ----------
+
+    [Test]
+    public async Task StartRun_WithAutoAdvance_StartsTheRunMovingOnByItself()
+    {
+        // Arrange
+        var (eventId, _, _) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+
+        // Act
+        var response = await _client.PostAsJsonAsync(
+            $"/v1/events/{eventId}/plans/run/start", new StartRunDto(AutoAdvance: true), JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await response.Content.ReadFromJsonAsync<RunDto>(JsonOptions))!.AutoAdvance.Should().BeTrue();
+        (await GetRunAsync(eventId)).AutoAdvance.Should().BeTrue();
+    }
+
+    [Test]
+    public async Task StartRun_WithNoBody_StartsWithoutAutoAdvance()
+    {
+        // Arrange
+        var (eventId, _, _) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+
+        // Act
+        var response = await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+
+        // Assert
+        (await response.Content.ReadFromJsonAsync<RunDto>(JsonOptions))!.AutoAdvance.Should().BeFalse();
+    }
+
+    [Test]
+    public async Task StartRun_StartedOverWithNoBody_KeepsAutoAdvance()
+    {
+        // Arrange — the Start Over of builds that know nothing of auto-advance.
+        var (eventId, _, _) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsJsonAsync($"/v1/events/{eventId}/plans/run/start", new StartRunDto(AutoAdvance: true), JsonOptions);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/complete", null);
+
+        // Act
+        var response = await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await response.Content.ReadFromJsonAsync<RunDto>(JsonOptions))!.AutoAdvance.Should().BeTrue();
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task SetAutoAdvance_AsPlanCreator_Returns200AndTellsEveryDevice(bool enabled)
+    {
+        // Arrange
+        var (eventId, _, _) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsJsonAsync($"/v1/events/{eventId}/plans/run/start", new StartRunDto(AutoAdvance: !enabled), JsonOptions);
+
+        // Act
+        var response = await _client.PostAsJsonAsync(
+            $"/v1/events/{eventId}/plans/run/auto-advance", new RunAutoAdvanceDto(enabled), JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var run = await response.Content.ReadFromJsonAsync<RunDto>(JsonOptions);
+        run!.AutoAdvance.Should().Be(enabled);
+        run.CanControl.Should().BeTrue();
+        (await GetRunAsync(eventId)).AutoAdvance.Should().Be(enabled);
+        await _factory.RunBroadcaster.Received(1)
+            .BroadcastRunUpdatedAsync(eventId, Arg.Is<RunDto>(d => d.AutoAdvance == enabled));
+    }
+
+    [Test]
+    public async Task SetAutoAdvance_AsEventAdmin_Returns200()
+    {
+        // Arrange — a co-host who did not write the plan.
+        var (eventId, _, _) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+        StubEventAdmin(eventId, OtherUserId);
+        SetAuth(OtherUserId);
+
+        // Act
+        var response = await _client.PostAsJsonAsync(
+            $"/v1/events/{eventId}/plans/run/auto-advance", new RunAutoAdvanceDto(true), JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await response.Content.ReadFromJsonAsync<RunDto>(JsonOptions))!.AutoAdvance.Should().BeTrue();
+    }
+
+    [Test]
+    public async Task SetAutoAdvance_AsParticipant_Returns403AndLeavesItAlone()
+    {
+        // Arrange
+        var (eventId, _, _) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+        StubParticipant(eventId);
+        SetAuth(OtherUserId);
+
+        // Act
+        var response = await _client.PostAsJsonAsync(
+            $"/v1/events/{eventId}/plans/run/auto-advance", new RunAutoAdvanceDto(true), JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        SetAuth(CreatorId);
+        (await GetRunAsync(eventId)).AutoAdvance.Should().BeFalse();
+    }
+
+    [Test]
+    public async Task SetAutoAdvance_NoRun_Returns404()
+    {
+        // Arrange
+        var (eventId, _, _) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+
+        // Act
+        var response = await _client.PostAsJsonAsync(
+            $"/v1/events/{eventId}/plans/run/auto-advance", new RunAutoAdvanceDto(true), JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Test]
+    public async Task SetAutoAdvance_Unauthenticated_Returns401()
+    {
+        // Arrange
+        var (eventId, _, _) = await SeedPlanWithTwoItemsAsync();
+
+        // Act
+        var response = await _client.PostAsJsonAsync(
+            $"/v1/events/{eventId}/plans/run/auto-advance", new RunAutoAdvanceDto(true), JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [TestCase("{}")]
+    [TestCase("""{ "enabled": null }""")]
+    [TestCase("")]
+    public async Task SetAutoAdvance_NotSayingOnOrOff_Returns400AndLeavesItAlone(string body)
+    {
+        // Arrange — a body that says nothing is refused rather than read as off.
+        var (eventId, _, _) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsJsonAsync($"/v1/events/{eventId}/plans/run/start", new StartRunDto(AutoAdvance: true), JsonOptions);
+
+        // Act
+        var response = await PostJsonAsync($"/v1/events/{eventId}/plans/run/auto-advance", body);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
+        (await GetRunAsync(eventId)).AutoAdvance.Should().BeTrue();
+    }
+
+    [Test]
+    public async Task GetRun_AfterTheItemsTimeRanOut_ReadsTheNextItemWithoutWritingIt()
+    {
+        // Arrange — five minutes and ten seconds into the first item's five.
+        var (eventId, item1Id, item2Id) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsJsonAsync($"/v1/events/{eventId}/plans/run/start", new StartRunDto(AutoAdvance: true), JsonOptions);
+        var entered = DateTime.UtcNow.AddSeconds(-310);
+        await BackdateCurrentItemAsync(eventId, entered);
+
+        // Act
+        var run = await GetRunAsync(eventId);
+
+        // Assert
+        run.CurrentItemId.Should().Be(item2Id);
+        run.CurrentItemStartedAt.Should().BeCloseTo(entered.AddSeconds(300), TimeSpan.FromMilliseconds(1));
+        run.Items.Single(i => i.PlanItemId == item1Id).ActualElapsedSeconds.Should().Be(300);
+        (await StoredCurrentItemIdAsync(eventId)).Should().Be(item1Id, "a read never writes");
+    }
+
+    [Test]
+    public async Task Advance_FromTheItemTheRunMovedOnFrom_Returns200WithTheRunAsItIsNow()
+    {
+        // Arrange — Next tapped on the first item after its time ran out.
+        var (eventId, item1Id, item2Id) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsJsonAsync($"/v1/events/{eventId}/plans/run/start", new StartRunDto(AutoAdvance: true), JsonOptions);
+        await BackdateCurrentItemAsync(eventId, DateTime.UtcNow.AddSeconds(-310));
+
+        // Act
+        var response = await _client.PostAsJsonAsync(
+            $"/v1/events/{eventId}/plans/run/advance", new AdvanceRunDto(item1Id), JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var run = await response.Content.ReadFromJsonAsync<RunDto>(JsonOptions);
+        run!.Status.Should().Be(RunStatus.Running);
+        run.CurrentItemId.Should().Be(item2Id);
+    }
+
+    [Test]
+    public async Task Advance_FromTheItemTheRunMovedOnTo_SavesTheMoveWithTheTap()
+    {
+        // Arrange — the phone flipped to the second item at 0:00, and its Next ends the session.
+        var (eventId, item1Id, item2Id) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsJsonAsync($"/v1/events/{eventId}/plans/run/start", new StartRunDto(AutoAdvance: true), JsonOptions);
+        await BackdateCurrentItemAsync(eventId, DateTime.UtcNow.AddSeconds(-310));
+
+        // Act
+        var response = await _client.PostAsJsonAsync(
+            $"/v1/events/{eventId}/plans/run/advance", new AdvanceRunDto(item2Id), JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var run = await GetRunAsync(eventId);
+        run.Status.Should().Be(RunStatus.Completed);
+        run.Items.Single(i => i.PlanItemId == item1Id).ActualElapsedSeconds.Should().Be(300);
+        run.Items.Single(i => i.PlanItemId == item2Id).CompletedAt.Should().NotBeNull();
+    }
+
     // ---------- Realtime ----------
 
     [Test]
@@ -980,6 +1201,17 @@ public class RunControllerTests
             .ExecuteUpdateAsync(set => set
                 .SetProperty(r => r.CurrentItemStartedAtUtc, entered)
                 .SetProperty(r => r.UpdatedAt, entered));
+    }
+
+    /// <summary>The current item as the database holds it, whatever a read shows.</summary>
+    private async Task<Guid?> StoredCurrentItemIdAsync(Guid eventId)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<CoachingDbContext>();
+        return await db.TrainingPlanRuns
+            .Where(r => r.EventId == eventId)
+            .Select(r => r.CurrentItemId)
+            .SingleAsync();
     }
 
     private Task<HttpResponseMessage> PostJsonAsync(string url, string json) =>

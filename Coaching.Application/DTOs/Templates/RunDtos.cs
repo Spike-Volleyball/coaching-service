@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using Coaching.Domain.Enums;
 
 namespace Coaching.Application.DTOs.Templates;
@@ -18,6 +19,9 @@ public class RunDto
 
     public DateTime StartedAt { get; set; }
     public DateTime? CompletedAt { get; set; }
+
+    // Moves on by itself when a step's time is up, except from the last step.
+    public bool AutoAdvance { get; set; }
 
     // Server "now" so each client computes a clock offset.
     public DateTime ServerTime { get; set; }
@@ -97,8 +101,16 @@ public record GoToRunDto(Guid FromItemId, Guid ToItemId, DateTimeOffset? Occurre
 /// <summary>
 /// Optional body for POST .../run/start. A run that is Running or Paused is only started over
 /// when <paramref name="Restart"/> says so; a finished one starts over either way.
+/// <paramref name="AutoAdvance"/> sets whether the run moves on by itself; absent, a new run
+/// starts without it and a run started over keeps what it had.
 /// </summary>
-public record StartRunDto(bool Restart = false);
+public record StartRunDto(bool Restart = false, bool? AutoAdvance = null);
+
+/// <summary>
+/// Body for POST .../run/auto-advance: whether the run moves on by itself from now on. Required,
+/// so a body that says nothing is refused rather than read as off.
+/// </summary>
+public record RunAutoAdvanceDto([Required] bool? Enabled);
 
 /// <summary>What the caller may do with an event's run, answerable before any run exists.</summary>
 public record RunPermissionsDto(bool CanControl);

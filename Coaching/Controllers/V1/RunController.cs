@@ -49,7 +49,7 @@ public class RunController : Shared.Microservices.Controllers.BaseApiController
         [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] StartRunDto? request)
     {
         CheckIsUserLoggedIn();
-        var run = await _runService.StartAsync(eventId, JwtPayload.UserId, request?.Restart ?? false);
+        var run = await _runService.StartAsync(eventId, JwtPayload.UserId, request?.Restart ?? false, request?.AutoAdvance);
         return Ok(run);
     }
 
@@ -109,6 +109,15 @@ public class RunController : Shared.Microservices.Controllers.BaseApiController
     {
         CheckIsUserLoggedIn();
         var run = await _runService.ReopenAsync(eventId, JwtPayload.UserId, request?.OccurredAt);
+        return Ok(run);
+    }
+
+    [HttpPost("events/{eventId:guid}/plans/run/auto-advance")]
+    [NoResourceScope(RunControlOnly)]
+    public async Task<IActionResult> SetRunAutoAdvance([FromRoute] Guid eventId, [FromBody] RunAutoAdvanceDto request)
+    {
+        CheckIsUserLoggedIn();
+        var run = await _runService.SetAutoAdvanceAsync(eventId, request.Enabled!.Value, JwtPayload.UserId);
         return Ok(run);
     }
 }

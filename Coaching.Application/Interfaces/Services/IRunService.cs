@@ -9,7 +9,10 @@ namespace Coaching.Application.Interfaces.Services;
 /// </summary>
 public interface IRunService
 {
-    /// <summary>Returns the run for the event, or null when no run has started. View = any participant.</summary>
+    /// <summary>
+    /// Returns the run for the event, or null when no run has started. View = any participant.
+    /// A run moving on by itself is read as it stands now, past every step whose time ran out.
+    /// </summary>
     Task<RunDto?> GetByEventIdAsync(Guid eventId, Guid requestingUserId);
 
     /// <summary>Whether the user may watch the event's run: its plan's creator, a participant or a host.</summary>
@@ -21,11 +24,14 @@ public interface IRunService
     /// <summary>
     /// Create-or-reset: snapshot all plan items, set Running with the first item current. A run
     /// that is Running or Paused is only reset when <paramref name="restart"/> is set; otherwise
-    /// a conflict.
+    /// a conflict. <paramref name="autoAdvance"/> sets whether it moves on by itself; null leaves
+    /// a new run without it and a run started over as it was.
     /// </summary>
-    Task<RunDto> StartAsync(Guid eventId, Guid requestingUserId, bool restart = false);
+    Task<RunDto> StartAsync(Guid eventId, Guid requestingUserId, bool restart = false, bool? autoAdvance = null);
 
-    // Every control operation below takes occurredAt: when the tap was made, for a tap queued
+    // Every control operation below acts on the run as it stands now: a run moving on by itself
+    // is first moved past every step whose time ran out, and those moves are saved with the
+    // operation's own write. Each takes occurredAt: when the tap was made, for a tap queued
     // offline that reaches the server late. Null means now. Item ids are plan item ids — the
     // same ids as the run's CurrentItemId.
 
@@ -52,4 +58,10 @@ public interface IRunService
 
     /// <summary>Take a Completed run back to Running on the item it ended on, from that item's time.</summary>
     Task<RunDto> ReopenAsync(Guid eventId, Guid requestingUserId, DateTimeOffset? occurredAt = null);
+
+    /// <summary>
+    /// Whether the run moves on by itself when a step's time is up, from now on. Any status; a
+    /// run already so set is returned unchanged.
+    /// </summary>
+    Task<RunDto> SetAutoAdvanceAsync(Guid eventId, bool enabled, Guid requestingUserId);
 }
