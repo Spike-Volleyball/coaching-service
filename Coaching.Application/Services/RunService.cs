@@ -512,10 +512,10 @@ public class RunService : IRunService
     /// what only a write that landed may.
     /// </summary>
     /// <param name="movedOn">
-    /// The steps the run moved through by itself before the control acted, saved with it. The run
-    /// is caught up again before the save, since the write itself can leave it due — a step entered
-    /// with its time already used, auto-advance switched on in overtime — and no reply or broadcast
-    /// may show a step the run has left.
+    /// The steps the run moved through by itself before and as the control acted, saved with it.
+    /// The run is caught up again before the save, since the write itself can leave it due — a tap
+    /// queued offline acts minutes back, and the step it entered then may have run out since — and
+    /// no reply or broadcast may show a step the run has left.
     /// </param>
     private async Task<RunDto> CommitAsync(
         Guid eventId, TrainingPlanRun run, IReadOnlyList<AutoAdvancedStep> movedOn, Action? saved = null)

@@ -64,7 +64,7 @@ public static class RunSteps
         step.PlannedDurationSeconds > 0 && playedSeconds >= step.PlannedDurationSeconds;
 
     /// <summary>Whether a step comes after <paramref name="step"/> in the run, by position.</summary>
-    public static bool HasStepAfter(TrainingPlanRun run, TrainingPlanRunItem step)
+    private static bool HasStepAfter(TrainingPlanRun run, TrainingPlanRunItem step)
     {
         var steps = InOrder(run);
         var index = steps.IndexOf(step);

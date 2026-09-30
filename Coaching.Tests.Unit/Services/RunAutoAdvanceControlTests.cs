@@ -291,6 +291,26 @@ public class RunAutoAdvanceControlTests : RunServiceTestBase
     }
 
     [Test]
+    public async Task ResumeAsync_AQueuedTapWhoseStepRanOutSince_ReturnsTheRunMovedOn()
+    {
+        // Arrange — paused five minutes ago 200 seconds into step 1's 300; the resume was tapped
+        // three minutes ago on a phone with no signal, so step 1 ran out 80 seconds ago.
+        var run = PausedOn(Step1Id, elapsedSeconds: 200);
+        run.AutoAdvance = true;
+        run.UpdatedAt = Now.AddMinutes(-5);
+        StubRun(run);
+
+        // Act
+        var result = await _sut.ResumeAsync(EventId, CreatorId, occurredAt: Now.AddMinutes(-3));
+
+        // Assert
+        result.CurrentItemId.Should().Be(Step2Id);
+        result.CurrentItemStartedAt.Should().Be(Now.AddSeconds(-80));
+        result.Items.Single(i => i.PlanItemId == Step1Id).CompletedAt.Should().Be(Now.AddSeconds(-80));
+        await _runRepository.Received(1).SaveChangesAsync();
+    }
+
+    [Test]
     public async Task ResumeAsync_PausedWithTimeLeft_ResumesTheStep()
     {
         // Arrange
