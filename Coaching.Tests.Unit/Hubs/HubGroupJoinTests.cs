@@ -97,6 +97,37 @@ public class HubGroupJoinTests : UnitTestBase
     }
 
     [Test]
+    public async Task JoinRun_ACallerMadeAHostSinceTheyJoined_LeavesTheViewersRoom()
+    {
+        // Arrange — the same connection joined as a viewer before; both rooms would send it a copy
+        // of every update, one saying it may control the run and one saying it may not.
+        _runs.CanAsync(_userId, _resourceId, RunAccess.Control, Arg.Any<CancellationToken>()).Returns(true);
+        _runs.CanAsync(_userId, _resourceId, RunAccess.Read, Arg.Any<CancellationToken>()).Returns(true);
+
+        // Act
+        await Signed(RunHub()).JoinRun(_resourceId);
+
+        // Assert
+        await _groups.Received(1).RemoveFromGroupAsync("connection-1", TrainingRunHub.ViewersGroup(_resourceId), Arg.Any<CancellationToken>());
+        await _groups.DidNotReceive().RemoveFromGroupAsync(Arg.Any<string>(), TrainingRunHub.ControllersGroup(_resourceId), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task JoinRun_ACallerNoLongerAHost_LeavesTheControllersRoom()
+    {
+        // Arrange
+        _runs.CanAsync(_userId, _resourceId, RunAccess.Control, Arg.Any<CancellationToken>()).Returns(false);
+        _runs.CanAsync(_userId, _resourceId, RunAccess.Read, Arg.Any<CancellationToken>()).Returns(true);
+
+        // Act
+        await Signed(RunHub()).JoinRun(_resourceId);
+
+        // Assert
+        await _groups.Received(1).RemoveFromGroupAsync("connection-1", TrainingRunHub.ControllersGroup(_resourceId), Arg.Any<CancellationToken>());
+        await _groups.DidNotReceive().RemoveFromGroupAsync(Arg.Any<string>(), TrainingRunHub.ViewersGroup(_resourceId), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task JoinRun_ARunTheCallerMayNotWatch_IsRefusedAndJoinsNothing()
     {
         // Arrange

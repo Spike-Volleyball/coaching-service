@@ -31,6 +31,10 @@ public class TrainingRunHub(
             controls ? ControllersGroup(eventId) : ViewersGroup(eventId),
             eventId,
             controls ? RunAccess.Control : RunAccess.Read);
+
+        // A connection that joined before its role changed is still in the other room, and would get
+        // a second copy of every update telling it the opposite.
+        await LeaveGroupAsync(controls ? ViewersGroup(eventId) : ControllersGroup(eventId));
         await Clients.Caller.SendAsync("JoinedRun", eventId);
     }
 
