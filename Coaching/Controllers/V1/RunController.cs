@@ -2,7 +2,9 @@ using Asp.Versioning;
 using Coaching.Application.DTOs.Templates;
 using Coaching.Application.Interfaces.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Shared.DataAccess.Providers.Interfaces;
+using Shared.Security.Access;
 
 namespace Coaching.Controllers.V1;
 
@@ -29,11 +31,22 @@ public class RunController : Shared.Microservices.Controllers.BaseApiController
         return Ok(run);
     }
 
-    [HttpPost("events/{eventId:guid}/plans/run/start")]
-    public async Task<IActionResult> StartRun([FromRoute] Guid eventId)
+    [HttpGet("events/{eventId:guid}/plans/run/permissions")]
+    [NoResourceScope("Answers only whether the caller may control the event's run, and false for anyone who may not — a missing event reads like any other")]
+    public async Task<IActionResult> GetRunPermissions([FromRoute] Guid eventId)
     {
         CheckIsUserLoggedIn();
-        var run = await _runService.StartAsync(eventId, JwtPayload.UserId);
+        var canControl = await _runService.CanControlRunAsync(eventId, JwtPayload.UserId);
+        return Ok(new RunPermissionsDto(canControl));
+    }
+
+    [HttpPost("events/{eventId:guid}/plans/run/start")]
+    public async Task<IActionResult> StartRun(
+        [FromRoute] Guid eventId,
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] StartRunDto? request)
+    {
+        CheckIsUserLoggedIn();
+        var run = await _runService.StartAsync(eventId, JwtPayload.UserId, request?.Restart ?? false);
         return Ok(run);
     }
 

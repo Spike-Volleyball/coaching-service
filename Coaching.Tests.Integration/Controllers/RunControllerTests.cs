@@ -127,6 +127,25 @@ public class RunControllerTests
     }
 
     [Test]
+    public async Task GetRun_AsEventAdmin_Returns200WithCanControlTrue()
+    {
+        // Arrange — a co-host who did not write the plan.
+        var (eventId, _, _) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+        StubEventAdmin(eventId, OtherUserId);
+        SetAuth(OtherUserId);
+
+        // Act
+        var response = await _client.GetAsync($"/v1/events/{eventId}/plans/run");
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var run = await response.Content.ReadFromJsonAsync<RunDto>(JsonOptions);
+        run!.CanControl.Should().BeTrue();
+    }
+
+    [Test]
     public async Task GetRun_AsUnrelatedUser_Returns403()
     {
         // Arrange — not the creator, not a participant, not an event host.
@@ -211,6 +230,166 @@ public class RunControllerTests
 
         // Assert
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Test]
+    public async Task StartRun_AsEventAdmin_Returns200Running()
+    {
+        // Arrange
+        var (eventId, item1Id, _) = await SeedPlanWithTwoItemsAsync();
+        StubEventAdmin(eventId, OtherUserId);
+        SetAuth(OtherUserId);
+
+        // Act
+        var response = await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var run = await response.Content.ReadFromJsonAsync<RunDto>(JsonOptions);
+        run!.Status.Should().Be(RunStatus.Running);
+        run.CurrentItemId.Should().Be(item1Id);
+        run.CanControl.Should().BeTrue();
+    }
+
+    [TestCase(false)]
+    [TestCase(true)]
+    public async Task StartRun_WhileTheRunIsInProgress_WithoutRestart_Returns409AndLeavesItAlone(bool paused)
+    {
+        // Arrange
+        var (eventId, item1Id, item2Id) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+        await _client.PostAsJsonAsync($"/v1/events/{eventId}/plans/run/advance", new AdvanceRunDto(item1Id), JsonOptions);
+        if (paused)
+            await _client.PostAsync($"/v1/events/{eventId}/plans/run/pause", null);
+
+        // Act
+        var response = await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
+        var run = await GetRunAsync(eventId);
+        run.CurrentItemId.Should().Be(item2Id);
+        run.Status.Should().Be(paused ? RunStatus.Paused : RunStatus.Running);
+    }
+
+    [Test]
+    public async Task StartRun_WhileTheRunIsInProgress_WithRestart_Returns200OnTheFirstItem()
+    {
+        // Arrange
+        var (eventId, item1Id, _) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+        await _client.PostAsJsonAsync($"/v1/events/{eventId}/plans/run/advance", new AdvanceRunDto(item1Id), JsonOptions);
+
+        // Act
+        var response = await _client.PostAsJsonAsync(
+            $"/v1/events/{eventId}/plans/run/start", new StartRunDto(Restart: true), JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var run = await response.Content.ReadFromJsonAsync<RunDto>(JsonOptions);
+        run!.CurrentItemId.Should().Be(item1Id);
+        run.Items.Should().OnlyContain(i => i.CompletedAt == null && i.ActualElapsedSeconds == 0);
+    }
+
+    [Test]
+    public async Task StartRun_AfterTheRunCompleted_WithNoBody_Returns200OnTheFirstItem()
+    {
+        // Arrange — the Start Over of the app builds already in the field sends no body.
+        var (eventId, item1Id, _) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/complete", null);
+
+        // Act
+        var response = await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var run = await response.Content.ReadFromJsonAsync<RunDto>(JsonOptions);
+        run!.Status.Should().Be(RunStatus.Running);
+        run.CurrentItemId.Should().Be(item1Id);
+    }
+
+    // ---------- Permissions ----------
+
+    [Test]
+    public async Task GetRunPermissions_AsPlanCreator_BeforeAnyRun_ReturnsCanControlTrue()
+    {
+        // Arrange
+        var (eventId, _, _) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+
+        // Act
+        var response = await _client.GetAsync($"/v1/events/{eventId}/plans/run/permissions");
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await response.Content.ReadFromJsonAsync<RunPermissionsDto>(JsonOptions))!.CanControl.Should().BeTrue();
+    }
+
+    [Test]
+    public async Task GetRunPermissions_AsEventAdmin_BeforeAnyPlan_ReturnsCanControlTrue()
+    {
+        // Arrange — nothing has been attached to the event yet.
+        var eventId = Guid.NewGuid();
+        StubEventAdmin(eventId, OtherUserId);
+        SetAuth(OtherUserId);
+
+        // Act
+        var response = await _client.GetAsync($"/v1/events/{eventId}/plans/run/permissions");
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await response.Content.ReadFromJsonAsync<RunPermissionsDto>(JsonOptions))!.CanControl.Should().BeTrue();
+    }
+
+    [Test]
+    public async Task GetRunPermissions_AsParticipant_ReturnsCanControlFalse()
+    {
+        // Arrange
+        var (eventId, _, _) = await SeedPlanWithTwoItemsAsync();
+        StubParticipant(eventId);
+        SetAuth(OtherUserId);
+
+        // Act
+        var response = await _client.GetAsync($"/v1/events/{eventId}/plans/run/permissions");
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await response.Content.ReadFromJsonAsync<RunPermissionsDto>(JsonOptions))!.CanControl.Should().BeFalse();
+    }
+
+    [Test]
+    public async Task GetRunPermissions_ForAnEventThatDoesNotExist_AnswersLikeAnyOtherEventTheCallerCannotRun()
+    {
+        // Arrange — a stranger learns nothing: a real event they have no part in answers the same.
+        var (realEventId, _, _) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(OtherUserId);
+
+        // Act
+        var real = await _client.GetAsync($"/v1/events/{realEventId}/plans/run/permissions");
+        var missing = await _client.GetAsync($"/v1/events/{Guid.NewGuid()}/plans/run/permissions");
+
+        // Assert
+        real.StatusCode.Should().Be(HttpStatusCode.OK);
+        missing.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await missing.Content.ReadAsStringAsync()).Should().Be(await real.Content.ReadAsStringAsync());
+    }
+
+    [Test]
+    public async Task GetRunPermissions_Unauthenticated_Returns401()
+    {
+        // Arrange
+        var (eventId, _, _) = await SeedPlanWithTwoItemsAsync();
+
+        // Act
+        var response = await _client.GetAsync($"/v1/events/{eventId}/plans/run/permissions");
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
     [Test]
@@ -518,6 +697,20 @@ public class RunControllerTests
 
     private void StubParticipant(Guid eventId) =>
         _factory.EventsGrpcClient.IsEventParticipantAsync(eventId, Arg.Any<Guid>()).Returns((true, true));
+
+    private void StubEventAdmin(Guid eventId, Guid userId)
+    {
+        _factory.EventsGrpcClient.IsEventParticipantAsync(eventId, userId).Returns((false, true));
+        _factory.EventsGrpcClient.IsEventAdminAsync(eventId, userId).Returns(true);
+    }
+
+    /// <summary>The run as the current caller reads it.</summary>
+    private async Task<RunDto> GetRunAsync(Guid eventId)
+    {
+        var response = await _client.GetAsync($"/v1/events/{eventId}/plans/run");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        return (await response.Content.ReadFromJsonAsync<RunDto>(JsonOptions))!;
+    }
 
     private async Task<(Guid eventId, Guid item1Id, Guid item2Id)> SeedPlanWithTwoItemsAsync()
     {

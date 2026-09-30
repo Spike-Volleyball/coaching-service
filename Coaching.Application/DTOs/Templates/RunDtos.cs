@@ -22,7 +22,7 @@ public class RunDto
     // Server "now" so each client computes a clock offset.
     public DateTime ServerTime { get; set; }
 
-    // True when the requesting user is the plan creator (may control the run).
+    // Whether the reader may control the run: the plan's creator or an event admin.
     public bool CanControl { get; set; }
 
     public List<RunItemDto> Items { get; set; } = new();
@@ -70,3 +70,12 @@ public class RunStationItemDto
 
 // Body for POST .../run/advance — guards against double-tap / concurrent advance.
 public record AdvanceRunDto(Guid FromItemId);
+
+/// <summary>
+/// Optional body for POST .../run/start. A run that is Running or Paused is only started over
+/// when <paramref name="Restart"/> says so; a finished one starts over either way.
+/// </summary>
+public record StartRunDto(bool Restart = false);
+
+/// <summary>What the caller may do with an event's run, answerable before any run exists.</summary>
+public record RunPermissionsDto(bool CanControl);

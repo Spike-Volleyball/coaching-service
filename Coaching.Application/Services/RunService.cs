@@ -50,16 +50,11 @@ public class RunService : IRunService
         // but an unauthorized caller must get the identical response (403/404) whether or not a
         // run — or even a plan — exists yet, so nothing about the run's existence leaks. Mirrors
         // TrainingPlanService.GetByEventIdAsync's gate-before-fetch order for the same reason.
-        var creatorId = await InstancePlanQuery(eventId)
-            .Select(p => (Guid?)p.CreatedByUserId)
-            .FirstOrDefaultAsync();
-        var isCreator = creatorId == requestingUserId;
-
-        if (!isCreator)
-            await EnsureCanReadRunAsync(eventId, requestingUserId);
+        var isCreator = await PlanCreatorIdAsync(eventId) == requestingUserId;
+        var canControl = isCreator || await EnsureCanReadRunAsync(eventId, requestingUserId);
 
         var run = await _runRepository.GetByEventIdWithDetailsAsync(eventId);
-        return run == null ? null : MapToDto(run, isCreator);
+        return run == null ? null : MapToDto(run, canControl);
     }
 
     // Mirrors TrainingPlanService.GetByEventIdAsync's participant/eventExists check (the sibling
@@ -67,19 +62,40 @@ public class RunService : IRunService
     // already used elsewhere in coaching-service (FeedbackAuthorizationService,
     // TrainingPlanService.PromoteToTemplateAsync) for the case where a host isn't in the
     // events-service participant roster.
-    private async Task EnsureCanReadRunAsync(Guid eventId, Guid userId)
+    /// <returns>Whether the reader is an event admin — which is also what lets them control the run.</returns>
+    private async Task<bool> EnsureCanReadRunAsync(Guid eventId, Guid userId)
     {
-        var (eventExists, onTheEvent) = await StandingOnEventAsync(eventId, userId);
+        var participant = _eventsGrpcClient.IsEventParticipantAsync(eventId, userId);
+        var admin = _eventsGrpcClient.IsEventAdminAsync(eventId, userId);
+        await Task.WhenAll(participant, admin);
+
+        var (isParticipant, eventExists) = await participant;
         if (!eventExists)
             throw new EntityNotFoundException("Event not found");
 
-        if (!onTheEvent)
+        var isAdmin = await admin;
+        if (!isParticipant && !isAdmin)
             throw new ForbiddenException("Only event participants, hosts, or the plan creator can view this run");
+
+        return isAdmin;
     }
 
     public async Task<bool> CanReadRunAsync(Guid eventId, Guid userId) =>
-        await InstancePlanQuery(eventId).AnyAsync(p => p.CreatedByUserId == userId)
+        await PlanCreatorIdAsync(eventId) == userId
         || (await StandingOnEventAsync(eventId, userId)).OnTheEvent;
+
+    public async Task<bool> CanControlRunAsync(Guid eventId, Guid userId) =>
+        await CanControlAsync(eventId, userId, await PlanCreatorIdAsync(eventId));
+
+    /// <param name="planCreatorId">The creator of the event's plan, when the caller already has it.</param>
+    private async Task<bool> CanControlAsync(Guid eventId, Guid userId, Guid? planCreatorId) =>
+        planCreatorId == userId || await _eventsGrpcClient.IsEventAdminAsync(eventId, userId);
+
+    private async Task EnsureCanControlAsync(Guid eventId, Guid userId, Guid? planCreatorId)
+    {
+        if (!await CanControlAsync(eventId, userId, planCreatorId))
+            throw new ForbiddenException("Only the plan creator or an event admin can control the run");
+    }
 
     /// <summary>A participant of any status or a host; a host need not be on the roster.</summary>
     private async Task<(bool EventExists, bool OnTheEvent)> StandingOnEventAsync(Guid eventId, Guid userId)
@@ -88,16 +104,22 @@ public class RunService : IRunService
         return (eventExists, eventExists && (isParticipant || await _eventsGrpcClient.IsEventAdminAsync(eventId, userId)));
     }
 
-    public async Task<RunDto> StartAsync(Guid eventId, Guid requestingUserId)
+    public async Task<RunDto> StartAsync(Guid eventId, Guid requestingUserId, bool restart = false)
     {
         var plan = await GetInstancePlanOrThrowAsync(eventId);
-        EnsureCreator(plan, requestingUserId);
+        await EnsureCanControlAsync(eventId, requestingUserId, plan.CreatedByUserId);
+
+        var run = await _runRepository.GetByEventIdWithDetailsAsync(eventId);
+
+        // A second phone's Start, or a Start Over tapped on a stale screen, put a live session back
+        // to step 1 (09-28). Starting over a session in progress is now said out loud; a finished
+        // one still starts over without it, which is what the builds in the field send.
+        if (run is { Status: RunStatus.Running or RunStatus.Paused } && !restart)
+            throw new ConflictException("This session is already running. Start it over to begin again from the first step.");
 
         var now = Now();
         var orderedItems = plan.Items.OrderBy(i => i.Order).ToList();
         var firstItem = orderedItems.FirstOrDefault();
-
-        var run = await _runRepository.GetByEventIdWithDetailsAsync(eventId);
 
         TrainingPlanRunItem NewRunItem(PlanItem item) => new()
         {
@@ -191,7 +213,7 @@ public class RunService : IRunService
             ["item_count"] = run.Items.Count
         });
 
-        return await BroadcastAsync(eventId, run, requestingUserId == plan.CreatedByUserId);
+        return await BroadcastAsync(eventId, run, true);
     }
 
     /// <summary>
@@ -357,20 +379,25 @@ public class RunService : IRunService
         return elapsed < 0 ? 0 : (int)elapsed;
     }
 
+    /// <summary>
+    /// The run, for a caller who may control it. The rule is asked before the run is read, so a
+    /// caller who may not control it is refused alike whether or not a session was started.
+    /// </summary>
     private async Task<(TrainingPlanRun run, bool isCreator)> LoadForControlAsync(Guid eventId, Guid requestingUserId)
     {
+        await EnsureCanControlAsync(eventId, requestingUserId, await PlanCreatorIdAsync(eventId));
+
         var run = await _runRepository.GetByEventIdWithDetailsAsync(eventId)
             ?? throw new EntityNotFoundException("No run has been started for this event");
-
-        var creatorId = await GetPlanCreatorIdAsync(run.PlanId);
-        if (requestingUserId != creatorId && !await _eventsGrpcClient.IsEventAdminAsync(eventId, requestingUserId))
-            throw new ForbiddenException("Only the plan creator or an event admin can control the run");
 
         return (run, true);
     }
 
     private IQueryable<TrainingPlan> InstancePlanQuery(Guid eventId) =>
         _planRepository.Query().Where(p => p.EventId == eventId && p.PlanType == PlanType.Instance && !p.IsDeleted);
+
+    private Task<Guid?> PlanCreatorIdAsync(Guid eventId) =>
+        InstancePlanQuery(eventId).Select(p => (Guid?)p.CreatedByUserId).FirstOrDefaultAsync();
 
     private async Task<TrainingPlan> GetInstancePlanOrThrowAsync(Guid eventId)
     {
@@ -384,23 +411,6 @@ public class RunService : IRunService
             ?? throw new EntityNotFoundException("No training plan is attached to this event");
 
         return plan;
-    }
-
-    private async Task<Guid> GetPlanCreatorIdAsync(Guid planId)
-    {
-        var creatorId = await _planRepository.Query()
-            .Where(p => p.Id == planId)
-            .Select(p => (Guid?)p.CreatedByUserId)
-            .FirstOrDefaultAsync()
-            ?? throw new EntityNotFoundException("Training plan not found");
-
-        return creatorId;
-    }
-
-    private static void EnsureCreator(TrainingPlan plan, Guid requestingUserId)
-    {
-        if (plan.CreatedByUserId != requestingUserId)
-            throw new ForbiddenException("Only the plan creator can control the run");
     }
 
     private async Task<RunDto> BroadcastAsync(Guid eventId, TrainingPlanRun run, bool canControl)
