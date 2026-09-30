@@ -5,6 +5,7 @@ using Coaching.Application.Interfaces.Services;
 using Coaching.Domain.Enums;
 using Coaching.Domain.Models.Templates;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using Shared.Exceptions;
 using Shared.Services.Analytics;
 
@@ -206,18 +207,15 @@ public class RunService : IRunService
         run.CurrentItemStartedAtUtc = firstItem != null ? now : null;
         run.CurrentItemPausedElapsedSeconds = 0;
 
-        await _runRepository.SaveChangesAsync();
-
         // A restart is a start: the coach is running the practice again, and the run rows were
         // just reset to the plan as it stands now.
-        _analytics.Capture(requestingUserId, AnalyticsEventNames.PracticeRunStarted, new Dictionary<string, object?>
-        {
-            ["event_id"] = eventId,
-            ["plan_id"] = plan.Id,
-            ["item_count"] = run.Items.Count
-        });
-
-        return await BroadcastAsync(eventId, run);
+        return await CommitAsync(eventId, run, () =>
+            _analytics.Capture(requestingUserId, AnalyticsEventNames.PracticeRunStarted, new Dictionary<string, object?>
+            {
+                ["event_id"] = eventId,
+                ["plan_id"] = plan.Id,
+                ["item_count"] = run.Items.Count
+            }));
     }
 
     /// <summary>
@@ -281,8 +279,7 @@ public class RunService : IRunService
         run.CurrentItemStartedAtUtc = null;
         run.Status = RunStatus.Paused;
 
-        await _runRepository.SaveChangesAsync();
-        return await BroadcastAsync(eventId, run);
+        return await CommitAsync(eventId, run);
     }
 
     public async Task<RunDto> ResumeAsync(Guid eventId, Guid requestingUserId, DateTimeOffset? occurredAt = null)
@@ -294,8 +291,7 @@ public class RunService : IRunService
         run.CurrentItemStartedAtUtc = TapTime(run, occurredAt).AddSeconds(-run.CurrentItemPausedElapsedSeconds);
         run.Status = RunStatus.Running;
 
-        await _runRepository.SaveChangesAsync();
-        return await BroadcastAsync(eventId, run);
+        return await CommitAsync(eventId, run);
     }
 
     public async Task<RunDto> AdvanceAsync(Guid eventId, Guid fromItemId, Guid requestingUserId, DateTimeOffset? occurredAt = null)
@@ -317,14 +313,13 @@ public class RunService : IRunService
         else
             Enter(run, next, at);
 
-        await _runRepository.SaveChangesAsync();
-
         // Advancing off the end of the plan is the run finishing, and that is the same fact the
         // finish button records — so it is the same event, once, from whichever path got there.
-        if (next == null)
-            _analytics.CapturePracticeRunCompleted(run, requestingUserId);
-
-        return await BroadcastAsync(eventId, run);
+        return await CommitAsync(eventId, run, () =>
+        {
+            if (next == null)
+                _analytics.CapturePracticeRunCompleted(run, requestingUserId);
+        });
     }
 
     public async Task<RunDto> GoToAsync(Guid eventId, Guid fromItemId, Guid toItemId, Guid requestingUserId, DateTimeOffset? occurredAt = null)
@@ -346,8 +341,7 @@ public class RunService : IRunService
             Finish(run, steps[from], at);
         Enter(run, steps[to], at);
 
-        await _runRepository.SaveChangesAsync();
-        return await BroadcastAsync(eventId, run);
+        return await CommitAsync(eventId, run);
     }
 
     public async Task<RunDto> CompleteAsync(Guid eventId, Guid requestingUserId, DateTimeOffset? occurredAt = null)
@@ -361,11 +355,7 @@ public class RunService : IRunService
             Finish(run, current, at);
         End(run, at);
 
-        await _runRepository.SaveChangesAsync();
-
-        _analytics.CapturePracticeRunCompleted(run, requestingUserId);
-
-        return await BroadcastAsync(eventId, run);
+        return await CommitAsync(eventId, run, () => _analytics.CapturePracticeRunCompleted(run, requestingUserId));
     }
 
     public async Task<RunDto> ReopenAsync(Guid eventId, Guid requestingUserId, DateTimeOffset? occurredAt = null)
@@ -386,8 +376,7 @@ public class RunService : IRunService
         run.CompletedAtUtc = null;
         Enter(run, resumed, at);
 
-        await _runRepository.SaveChangesAsync();
-        return await BroadcastAsync(eventId, run);
+        return await CommitAsync(eventId, run);
     }
 
     private static List<TrainingPlanRunItem> Steps(TrainingPlanRun run) =>
@@ -493,9 +482,29 @@ public class RunService : IRunService
         return plan;
     }
 
-    /// <summary>Tells every device watching the run; answers the controller who changed it.</summary>
-    private async Task<RunDto> BroadcastAsync(Guid eventId, TrainingPlanRun run)
+    /// <summary>
+    /// The one save of a control write, then word of it to every device watching the run; the
+    /// controller who made it is answered with the same. Losing a race to another phone is not an
+    /// error: the write that landed first stands, nothing of this one is kept, and the caller is
+    /// told what the run is now — the answer a stale tap gets. <paramref name="saved"/> records
+    /// what only a write that landed may.
+    /// </summary>
+    private async Task<RunDto> CommitAsync(Guid eventId, TrainingPlanRun run, Action? saved = null)
     {
+        try
+        {
+            await _runRepository.SaveChangesAsync();
+        }
+        catch (DbUpdateException ex) when (ex is DbUpdateConcurrencyException
+            || ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation })
+        {
+            var current = await _runRepository.GetByEventIdWithDetailsNoTrackingAsync(eventId)
+                ?? throw new EntityNotFoundException("No run has been started for this event");
+            return MapToDto(current, canControl: true);
+        }
+
+        saved?.Invoke();
+
         var dto = MapToDto(run, canControl: true);
         await _broadcaster.BroadcastRunUpdatedAsync(eventId, dto);
         return dto;

@@ -21,6 +21,9 @@ public class TrainingPlanRun : BaseEntity
     public DateTime StartedAtUtc { get; set; }
     public DateTime? CompletedAtUtc { get; set; }
 
+    // Postgres's own row version: a write made from a read another phone has since overtaken is refused.
+    public uint RowVersion { get; set; }
+
     public virtual TrainingPlan Plan { get; set; } = null!;
     public virtual ICollection<TrainingPlanRunItem> Items { get; set; } = new List<TrainingPlanRunItem>();
 }

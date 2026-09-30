@@ -22,6 +22,13 @@ public class TrainingPlanRunConfiguration : IEntityTypeConfiguration<TrainingPla
         builder.HasIndex(r => r.PlanId).IsUnique();
         builder.HasIndex(r => r.EventId);
 
+        // Two phones control one run. xmin is a system column, so this adds nothing to the table.
+        builder.Property(r => r.RowVersion)
+            .HasColumnName("xmin")
+            .HasColumnType("xid")
+            .ValueGeneratedOnAddOrUpdate()
+            .IsConcurrencyToken();
+
         builder.HasOne(r => r.Plan)
             .WithMany()
             .HasForeignKey(r => r.PlanId)
