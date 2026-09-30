@@ -111,6 +111,14 @@ public abstract class RunServiceTestBase : UnitTestBase
         return run;
     }
 
+    /// <summary><see cref="RunningOn"/>, set to move on by itself when a step's time is up.</summary>
+    protected TrainingPlanRun AutoAdvancingOn(Guid stepId, int elapsedSeconds)
+    {
+        var run = RunningOn(stepId, elapsedSeconds);
+        run.AutoAdvance = true;
+        return run;
+    }
+
     /// <summary>Paused just now, <paramref name="elapsedSeconds"/> into <paramref name="stepId"/>.</summary>
     protected TrainingPlanRun PausedOn(Guid stepId, int elapsedSeconds)
     {

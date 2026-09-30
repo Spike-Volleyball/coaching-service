@@ -277,7 +277,7 @@ public class RunService : IRunService
         if (run.Status != RunStatus.Running)
             return MapToDto(run, canControl: true);
 
-        run.CurrentItemPausedElapsedSeconds = ElapsedSeconds(run, TapTime(run, occurredAt));
+        run.CurrentItemPausedElapsedSeconds = RunSteps.ElapsedSeconds(run, TapTime(run, occurredAt));
         run.CurrentItemStartedAtUtc = null;
         run.Status = RunStatus.Paused;
 
@@ -299,7 +299,7 @@ public class RunService : IRunService
     public async Task<RunDto> AdvanceAsync(Guid eventId, Guid fromItemId, Guid requestingUserId, DateTimeOffset? occurredAt = null)
     {
         var run = await LoadForControlAsync(eventId, requestingUserId);
-        var steps = Steps(run);
+        var steps = RunSteps.InOrder(run);
         var from = steps.FindIndex(s => s.PlanItemId == fromItemId);
 
         // A double tap, or one queued on a screen that has since moved on.
@@ -307,15 +307,15 @@ public class RunService : IRunService
             return MapToDto(run, canControl: true);
 
         var at = TapTime(run, occurredAt);
-        var played = ElapsedSeconds(run, at);
+        var played = RunSteps.ElapsedSeconds(run, at);
         var left = steps[from];
-        Finish(left, played, at);
+        RunSteps.Finish(left, played, at);
 
         var next = from + 1 < steps.Count ? steps[from + 1] : null;
         if (next == null)
-            End(run, at);
+            RunSteps.End(run, at);
         else
-            Enter(run, next, at);
+            RunSteps.Enter(run, next, at);
 
         // Advancing off the end of the plan is the run finishing, and that is the same fact the
         // finish button records — so it is the same event, once, from whichever path got there.
@@ -331,7 +331,7 @@ public class RunService : IRunService
     public async Task<RunDto> GoToAsync(Guid eventId, Guid fromItemId, Guid toItemId, Guid requestingUserId, DateTimeOffset? occurredAt = null)
     {
         var run = await LoadForControlAsync(eventId, requestingUserId);
-        var steps = Steps(run);
+        var steps = RunSteps.InOrder(run);
         var from = steps.FindIndex(s => s.PlanItemId == fromItemId);
         var to = steps.FindIndex(s => s.PlanItemId == toItemId);
 
@@ -341,13 +341,13 @@ public class RunService : IRunService
             return MapToDto(run, canControl: true);
 
         var at = TapTime(run, occurredAt);
-        var played = ElapsedSeconds(run, at);
+        var played = RunSteps.ElapsedSeconds(run, at);
         var (left, target) = (steps[from], steps[to]);
         if (to < from)
-            Discard(left);
+            RunSteps.Discard(left);
         else
-            Finish(left, played, at);
-        Enter(run, target, at);
+            RunSteps.Finish(left, played, at);
+        RunSteps.Enter(run, target, at);
 
         return await CommitAsync(eventId, run, () =>
             _analytics.CapturePracticeRunStepChanged(run, left, target, Direction(from, to), played, requestingUserId));
@@ -361,8 +361,8 @@ public class RunService : IRunService
 
         var at = TapTime(run, occurredAt);
         if (run.Items.FirstOrDefault(s => s.PlanItemId == run.CurrentItemId) is { } current)
-            Finish(current, ElapsedSeconds(run, at), at);
-        End(run, at);
+            RunSteps.Finish(current, RunSteps.ElapsedSeconds(run, at), at);
+        RunSteps.End(run, at);
 
         return await CommitAsync(eventId, run, () => _analytics.CapturePracticeRunCompleted(run, requestingUserId));
     }
@@ -375,7 +375,7 @@ public class RunService : IRunService
 
         // The step that was current when the run ended ended with it. A run ended before one clock
         // read stamped both has only its last started step to go by.
-        var steps = Steps(run);
+        var steps = RunSteps.InOrder(run);
         var resumed = steps.FindLast(s => s.CompletedAtUtc is { } ended && ended == run.CompletedAtUtc)
             ?? steps.FindLast(s => s.StartedAtUtc != null);
         if (resumed == null)
@@ -383,13 +383,10 @@ public class RunService : IRunService
 
         var at = TapTime(run, occurredAt);
         run.CompletedAtUtc = null;
-        Enter(run, resumed, at);
+        RunSteps.Enter(run, resumed, at);
 
         return await CommitAsync(eventId, run);
     }
-
-    private static List<TrainingPlanRunItem> Steps(TrainingPlanRun run) =>
-        run.Items.OrderBy(i => i.Order).ToList();
 
     /// <summary>A move to the neighbouring step either way, or past it, by position in the run.</summary>
     private static string Direction(int from, int to) => (to - from) switch
@@ -398,57 +395,6 @@ public class RunService : IRunService
         -1 => RunStepDirection.Previous,
         _ => RunStepDirection.Jump,
     };
-
-    /// <summary>
-    /// Makes <paramref name="step"/> current and running from the time it already has, so a step
-    /// played before picks up where it stopped and a fresh one starts at zero. It keeps the moment
-    /// it was first entered.
-    /// </summary>
-    private static void Enter(TrainingPlanRun run, TrainingPlanRunItem step, DateTime at)
-    {
-        step.StartedAtUtc ??= at;
-        step.CompletedAtUtc = null;
-
-        run.Status = RunStatus.Running;
-        run.CurrentItemId = step.PlanItemId;
-        run.CurrentItemStartedAtUtc = at.AddSeconds(-step.ActualElapsedSeconds);
-        run.CurrentItemPausedElapsedSeconds = step.ActualElapsedSeconds;
-    }
-
-    /// <summary>Leaves the current step forward, keeping the time it was played.</summary>
-    private static void Finish(TrainingPlanRunItem step, int playedSeconds, DateTime at)
-    {
-        step.ActualElapsedSeconds = playedSeconds;
-        step.CompletedAtUtc = at;
-    }
-
-    /// <summary>
-    /// Leaves the current step backward: going back says the visit was a mistake, so the step
-    /// returns to never having been played.
-    /// </summary>
-    private static void Discard(TrainingPlanRunItem step)
-    {
-        step.ActualElapsedSeconds = 0;
-        step.StartedAtUtc = null;
-        step.CompletedAtUtc = null;
-    }
-
-    private static void End(TrainingPlanRun run, DateTime at)
-    {
-        run.Status = RunStatus.Completed;
-        run.CurrentItemId = null;
-        run.CurrentItemStartedAtUtc = null;
-        run.CompletedAtUtc = at;
-    }
-
-    private static int ElapsedSeconds(TrainingPlanRun run, DateTime at)
-    {
-        if (run.Status == RunStatus.Paused || run.CurrentItemStartedAtUtc == null)
-            return run.CurrentItemPausedElapsedSeconds;
-
-        var elapsed = (at - run.CurrentItemStartedAtUtc.Value).TotalSeconds;
-        return elapsed < 0 ? 0 : (int)elapsed;
-    }
 
     /// <summary>
     /// When a control was tapped, for the clock math. A tap queued offline says when it was made,
