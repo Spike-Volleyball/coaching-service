@@ -13,7 +13,7 @@ namespace Coaching.Controllers.V1;
 public class RunController : Shared.Microservices.Controllers.BaseApiController
 {
     private const string RunControlOnly =
-        "Controls only for whoever may run the session — its plan's creator or an event admin — asked before the run is read, as for every other control";
+        "The run service lets through only whoever may run the session — its plan's creator or an event admin — and asks before it reads the run, as for every other control";
 
     private readonly IRunService _runService;
 
