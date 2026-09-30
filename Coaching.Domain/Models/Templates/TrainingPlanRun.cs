@@ -21,6 +21,10 @@ public class TrainingPlanRun : BaseEntity
     public DateTime StartedAtUtc { get; set; }
     public DateTime? CompletedAtUtc { get; set; }
 
+    // Moves on to the next step by itself when a step's planned time is up. The last step never
+    // does: it runs into overtime until a coach finishes the session.
+    public bool AutoAdvance { get; set; }
+
     // Postgres's own row version: a write made from a read another phone has since overtaken is refused.
     public uint RowVersion { get; set; }
 
