@@ -982,6 +982,34 @@ public class RunControllerTests
     }
 
     [Test]
+    public async Task SetAutoAdvance_OnWhilePausedInOvertime_LeavesItPausedAndTheResumeMovesOn()
+    {
+        // Arrange — paused ten seconds past the first item's five minutes, by hand.
+        var (eventId, item1Id, item2Id) = await SeedPlanWithTwoItemsAsync();
+        SetAuth(CreatorId);
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/start", null);
+        await BackdateCurrentItemAsync(eventId, DateTime.UtcNow.AddSeconds(-310));
+        await _client.PostAsync($"/v1/events/{eventId}/plans/run/pause", null);
+
+        // Act
+        var switchedOn = await _client.PostAsJsonAsync(
+            $"/v1/events/{eventId}/plans/run/auto-advance", new RunAutoAdvanceDto(true), JsonOptions);
+        var resumed = await _client.PostAsync($"/v1/events/{eventId}/plans/run/resume", null);
+
+        // Assert — switching on only set it; the resume moved on, the second item starting then
+        var paused = await switchedOn.Content.ReadFromJsonAsync<RunDto>(JsonOptions);
+        paused!.AutoAdvance.Should().BeTrue();
+        paused.Status.Should().Be(RunStatus.Paused);
+        paused.CurrentItemId.Should().Be(item1Id);
+
+        var run = await resumed.Content.ReadFromJsonAsync<RunDto>(JsonOptions);
+        run!.Status.Should().Be(RunStatus.Running);
+        run.CurrentItemId.Should().Be(item2Id);
+        run.CurrentItemStartedAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromSeconds(5));
+        run.Items.Single(i => i.PlanItemId == item1Id).ActualElapsedSeconds.Should().BeGreaterThanOrEqualTo(310);
+    }
+
+    [Test]
     public async Task GoTo_BackToAnItemThatRanItsFullTime_PlaysItsFullTimeAgain()
     {
         // Arrange — the first item's five minutes ran out and the run moved on by itself.

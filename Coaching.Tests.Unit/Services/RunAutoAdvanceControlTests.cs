@@ -460,6 +460,33 @@ public class RunAutoAdvanceControlTests : RunServiceTestBase
         result.CurrentItemId.Should().Be(Step1Id);
     }
 
+    [Test]
+    public async Task SetAutoAdvanceAsync_OnWhilePausedInOvertime_ThenResumed_MovesOnAtTheResumeTap()
+    {
+        // Arrange — paused 100 seconds past step 1's five minutes, by hand.
+        StubRun(PausedOn(Step1Id, elapsedSeconds: 400));
+
+        // Act — switched on while paused; resumed two minutes later, by a tap queued 30 seconds
+        // before it reached the server
+        var switchedOn = await _sut.SetAutoAdvanceAsync(EventId, enabled: true, CreatorId);
+        AdvanceTime(TimeSpan.FromMinutes(2));
+        var resumeTapped = Now.AddSeconds(-30);
+        var resumed = await _sut.ResumeAsync(EventId, CreatorId, occurredAt: resumeTapped);
+
+        // Assert — switching on only set it; the resume moved on, the next step running from the tap
+        switchedOn.Status.Should().Be(RunStatus.Paused);
+        switchedOn.CurrentItemId.Should().Be(Step1Id);
+        switchedOn.CurrentItemPausedElapsedSeconds.Should().Be(400);
+
+        resumed.Status.Should().Be(RunStatus.Running);
+        resumed.CurrentItemId.Should().Be(Step2Id);
+        resumed.CurrentItemStartedAt.Should().Be(resumeTapped);
+
+        var left = resumed.Items.Single(i => i.PlanItemId == Step1Id);
+        left.ActualElapsedSeconds.Should().Be(400);
+        left.CompletedAt.Should().Be(resumeTapped);
+    }
+
     [TestCase(RunStatus.Paused)]
     [TestCase(RunStatus.Completed)]
     public async Task SetAutoAdvanceAsync_OnARunThatIsNotRunning_SavesIt(RunStatus status)
