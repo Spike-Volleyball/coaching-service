@@ -3,6 +3,7 @@ using System;
 using Coaching.Infrastructure.Data.Context;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Coaching.Infrastructure.Migrations
 {
     [DbContext(typeof(CoachingDbContext))]
-    partial class CoachingDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260930162433_TrainingPlanRunConcurrencyToken")]
+    partial class TrainingPlanRunConcurrencyToken
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -2077,9 +2080,6 @@ namespace Coaching.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<bool>("AutoAdvance")
-                        .HasColumnType("boolean");
-
                     b.Property<DateTime?>("CompletedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
@@ -2123,10 +2123,6 @@ namespace Coaching.Infrastructure.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("CurrentItemStartedAtUtc")
-                        .HasDatabaseName("IX_TrainingPlanRuns_AutoAdvancing")
-                        .HasFilter("\"AutoAdvance\" AND \"Status\" = 0");
 
                     b.HasIndex("EventId");
 

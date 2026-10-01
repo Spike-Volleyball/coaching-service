@@ -7,7 +7,11 @@ namespace Coaching.Authorization;
 public sealed class RunAuthority(IRunService runs) : IResourceAuthority<RunAccess>
 {
     public Task<bool> CanAsync(Guid? userId, Guid resourceId, RunAccess access, CancellationToken ct) =>
-        userId is { } readerId && access == RunAccess.Read
-            ? runs.CanReadRunAsync(resourceId, readerId)
-            : Task.FromResult(false);
+        (userId, access) switch
+        {
+            (null, _) => Task.FromResult(false),
+            ({ } readerId, RunAccess.Read) => runs.CanReadRunAsync(resourceId, readerId),
+            ({ } controllerId, RunAccess.Control) => runs.CanControlRunAsync(resourceId, controllerId),
+            _ => Task.FromResult(false),
+        };
 }

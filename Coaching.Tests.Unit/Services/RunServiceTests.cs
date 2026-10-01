@@ -1,3 +1,4 @@
+using System.Net;
 using Coaching.Application.DTOs.Templates;
 using Coaching.Application.Interfaces.Repositories;
 using Coaching.Application.Interfaces.Services;
@@ -202,6 +203,85 @@ public class RunServiceTests : UnitTestBase
     }
 
     [Test]
+    public async Task StartAsync_EventAdminWhoDidNotCreateThePlan_StartsTheRun()
+    {
+        // Arrange — a co-host runs the practice from the floor; the plan is someone else's.
+        var plan = BuildPlan();
+        StubPlanQuery(plan);
+        StubNoRun();
+        _eventsGrpcClient.IsEventAdminAsync(EventId, OtherUserId).Returns(true);
+
+        // Act
+        var result = await _sut.StartAsync(EventId, OtherUserId);
+
+        // Assert
+        result.Status.Should().Be(RunStatus.Running);
+        result.StartedByUserId.Should().Be(OtherUserId);
+        result.CanControl.Should().BeTrue();
+    }
+
+    [TestCase(RunStatus.Running)]
+    [TestCase(RunStatus.Paused)]
+    public async Task StartAsync_RunAlreadyInProgress_WithoutRestart_ThrowsConflictAndChangesNothing(RunStatus status)
+    {
+        // Arrange — a second phone's Start must not quietly put a live session back to step 1.
+        StubPlanQuery(BuildPlan());
+        var run = RunningRunOnSecondItem();
+        run.Status = status;
+        StubExistingRun(run);
+
+        // Act
+        var act = () => _sut.StartAsync(EventId, CreatorId);
+
+        // Assert
+        (await act.Should().ThrowAsync<ConflictException>())
+            .Which.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        run.CurrentItemId.Should().Be(Item2Id);
+        await _runRepository.DidNotReceive().SaveChangesAsync();
+        await _broadcaster.DidNotReceiveWithAnyArgs().BroadcastRunUpdatedAsync(default, default!);
+    }
+
+    [TestCase(RunStatus.Running)]
+    [TestCase(RunStatus.Paused)]
+    public async Task StartAsync_RunAlreadyInProgress_WithRestart_StartsOverOnTheFirstItem(RunStatus status)
+    {
+        // Arrange
+        StubPlanQuery(BuildPlan());
+        var run = RunningRunOnSecondItem();
+        run.Status = status;
+        StubExistingRun(run);
+
+        // Act
+        var result = await _sut.StartAsync(EventId, CreatorId, restart: true);
+
+        // Assert
+        result.Status.Should().Be(RunStatus.Running);
+        result.CurrentItemId.Should().Be(Item1Id);
+        result.Items.Should().OnlyContain(i => i.CompletedAt == null && i.ActualElapsedSeconds == 0);
+        await _runRepository.Received(1).SaveChangesAsync();
+    }
+
+    [Test]
+    public async Task StartAsync_CompletedRun_WithoutRestart_StartsOver()
+    {
+        // Arrange — the builds already in the field send no body with their Start Over.
+        StubPlanQuery(BuildPlan());
+        var run = RunningRunOnSecondItem();
+        run.Status = RunStatus.Completed;
+        run.CurrentItemId = null;
+        run.CompletedAtUtc = PastDate(0, 1);
+        StubExistingRun(run);
+
+        // Act
+        var result = await _sut.StartAsync(EventId, CreatorId);
+
+        // Assert
+        result.Status.Should().Be(RunStatus.Running);
+        result.CurrentItemId.Should().Be(Item1Id);
+        result.CompletedAt.Should().BeNull();
+    }
+
+    [Test]
     public async Task StartAsync_NoPlanForEvent_ThrowsNotFound()
     {
         // Arrange
@@ -264,6 +344,21 @@ public class RunServiceTests : UnitTestBase
         StubPlanQuery(plan);
         StubExistingRun(RunningRunOnFirstItem(startedSecondsAgo: 0));
         _eventsGrpcClient.IsEventAdminAsync(EventId, OtherUserId).Returns(false);
+
+        // Act
+        var act = () => _sut.PauseAsync(EventId, OtherUserId);
+
+        // Assert
+        await act.Should().ThrowAsync<ForbiddenException>();
+    }
+
+    [Test]
+    public async Task PauseAsync_NeitherCreatorNorEventAdmin_NoRunYet_ThrowsForbiddenSameAsWhenRunExists()
+    {
+        // Arrange — the refusal comes before the run is read, so it cannot tell a stranger
+        // whether a session has been started.
+        StubPlanQuery(BuildPlan());
+        StubNoRun();
 
         // Act
         var act = () => _sut.PauseAsync(EventId, OtherUserId);
@@ -459,6 +554,53 @@ public class RunServiceTests : UnitTestBase
         mayRead.Should().BeFalse();
     }
 
+    // ---------- Who may control ----------
+
+    [Test]
+    public async Task CanControlRunAsync_ThePlansCreator_MayWithoutAskingEventsService()
+    {
+        // Arrange
+        StubPlanQuery(BuildPlan());
+
+        // Act
+        var mayControl = await _sut.CanControlRunAsync(EventId, CreatorId);
+
+        // Assert
+        mayControl.Should().BeTrue();
+        await _eventsGrpcClient.DidNotReceive().IsEventAdminAsync(Arg.Any<Guid>(), Arg.Any<Guid>());
+    }
+
+    [TestCase(true, true)]
+    [TestCase(false, false)]
+    public async Task CanControlRunAsync_SomeoneElse_MayWhenAnEventAdmin(bool admin, bool expected)
+    {
+        // Arrange — being on the roster is not enough: a player watches, a host runs it.
+        StubPlanQuery(BuildPlan());
+        _eventsGrpcClient.IsEventParticipantAsync(EventId, OtherUserId).Returns((true, true));
+        _eventsGrpcClient.IsEventAdminAsync(EventId, OtherUserId).Returns(admin);
+
+        // Act
+        var mayControl = await _sut.CanControlRunAsync(EventId, OtherUserId);
+
+        // Assert
+        mayControl.Should().Be(expected);
+    }
+
+    [Test]
+    public async Task CanControlRunAsync_BeforeAnyPlanIsAttached_AnEventAdminMay()
+    {
+        // Arrange — the idle screen asks before anything exists to start.
+        _planRepository.Query().Returns(new List<TrainingPlan>().BuildMock());
+        StubNoRun();
+        _eventsGrpcClient.IsEventAdminAsync(EventId, OtherUserId).Returns(true);
+
+        // Act
+        var mayControl = await _sut.CanControlRunAsync(EventId, OtherUserId);
+
+        // Assert
+        mayControl.Should().BeTrue();
+    }
+
     // ---------- Get ----------
 
     [Test]
@@ -567,9 +709,10 @@ public class RunServiceTests : UnitTestBase
     }
 
     [Test]
-    public async Task GetByEventIdAsync_EventHostNonParticipant_ReturnsDtoWithCanControlFalse()
+    public async Task GetByEventIdAsync_EventHostNonParticipant_ReturnsDtoWithCanControlTrue()
     {
-        // Arrange — an organizer/co-organizer who isn't in the participant roster should still see the run.
+        // Arrange — an organizer/co-organizer who isn't in the participant roster sees the run,
+        // and may run it: the same rule every control operation applies.
         var plan = BuildPlan();
         StubPlanQuery(plan);
         var run = RunningRunOnFirstItem(startedSecondsAgo: 10);
@@ -582,7 +725,23 @@ public class RunServiceTests : UnitTestBase
 
         // Assert
         result.Should().NotBeNull();
-        result!.CanControl.Should().BeFalse();
+        result!.CanControl.Should().BeTrue();
+    }
+
+    [Test]
+    public async Task GetByEventIdAsync_ParticipantWhoIsAlsoAnEventAdmin_ReturnsDtoWithCanControlTrue()
+    {
+        // Arrange — a co-host is usually on the roster too; being there must not hide the controls.
+        StubPlanQuery(BuildPlan());
+        StubExistingRun(RunningRunOnFirstItem(startedSecondsAgo: 10));
+        _eventsGrpcClient.IsEventParticipantAsync(EventId, OtherUserId).Returns((true, true));
+        _eventsGrpcClient.IsEventAdminAsync(EventId, OtherUserId).Returns(true);
+
+        // Act
+        var result = await _sut.GetByEventIdAsync(EventId, OtherUserId);
+
+        // Assert
+        result!.CanControl.Should().BeTrue();
     }
 
     [Test]
