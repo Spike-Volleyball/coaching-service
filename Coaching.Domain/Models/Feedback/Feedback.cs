@@ -36,4 +36,8 @@ public class Feedback : BaseEntity
     /// <see cref="Praise"/> alone can still hold one that was taken back.
     /// </summary>
     public Praise? LivePraise() => Praise is { IsDeleted: false } praise ? praise : null;
+
+    /// <summary>The coach who wrote it reads it; the player it is for, once it is shared with them.</summary>
+    public bool IsReadableBy(Guid userId) =>
+        CoachUserId == userId || (RecipientUserId == userId && SharedWithPlayer);
 }

@@ -68,3 +68,13 @@ public enum DifficultyLevel
     Intermediate = 1,
     Advanced = 2
 }
+
+// How an import lists a run of plain lines — lines that carry no marker ("- ", "1.") of their
+// own. Auto is what a client that predates the choice sends by leaving it out: numbered, as
+// every import was before the choice existed.
+public enum DirectionsStyle
+{
+    Auto = 0,
+    Numbered = 1,
+    Bullets = 2
+}

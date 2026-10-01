@@ -7,7 +7,11 @@ public interface IDrillService
 {
     // Drill CRUD
     Task<PagedResponse<DrillDto>> GetByFilterAsync(DrillFilterRequest filter, Guid? userId = null);
-    Task<DrillDto> GetByIdAsync(Guid id, Guid userId);
+    /// <summary>
+    /// The drill, when this reader may open it on its own or the context they met it in opens it
+    /// for them. Otherwise the same not-found a missing drill gives.
+    /// </summary>
+    Task<DrillDto> GetByIdAsync(Guid id, Guid userId, DrillReadContext? context = null);
 
     /// <summary>
     /// A public drill is anyone's; a private one is its creator's, and its club's members' when it

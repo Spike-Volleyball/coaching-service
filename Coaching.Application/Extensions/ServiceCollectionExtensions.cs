@@ -23,6 +23,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<Shared.Services.IGuardianCacheService, ProfilesGuardianCacheService>();
         services.AddScoped<Shared.Services.IGuardianAuthorizer, Shared.Services.GuardianAuthorizer>();
         services.AddScoped<IDrillService, DrillService>();
+        services.AddScoped<IDrillReadGrants, DrillReadGrants>();
         services.AddScoped<IDrillDialService, DrillDialService>();
         services.AddScoped<IDrillDialReconciler, DrillDialReconciler>();
         services.AddScoped<ITrainingPlanService, TrainingPlanService>();
@@ -52,6 +53,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IBadgeService, BadgeService>();
         services.AddScoped<IFeedbackMediaUrlSigner, FeedbackMediaUrlSigner>();
         services.AddScoped<IFactRepublisher, FactRepublisher>();
+        services.AddScoped<IImportedProseRebuilder, ImportedProseRebuilder>();
         return services;
     }
 }

@@ -389,17 +389,12 @@ public class TrainingPlanService : ITrainingPlanService
 
     public async Task<TrainingPlanDetailDto?> GetByEventIdAsync(Guid eventId, Guid userId)
     {
-        var (isParticipant, eventExists) = await _eventsGrpcClient.IsEventParticipantAsync(eventId, userId);
+        var (eventExists, mayRead) = await EventPlanAccess.StandingAsync(_eventsGrpcClient, eventId, userId);
 
         if (!eventExists)
             throw new EntityNotFoundException("Event not found");
 
-        // Being at the session is one way in; being responsible for it is the other. A club owner,
-        // a head coach covering it, the coach of the group it belongs to — none of them are
-        // participants, and all of them need to read the plan. IsEventParticipant deliberately
-        // stays a question about attendance, so the second arm is asked separately rather than by
-        // widening what "participant" means for every other caller.
-        if (!isParticipant && !await _eventsGrpcClient.IsEventAdminAsync(eventId, userId))
+        if (!mayRead)
             throw new ForbiddenException("You do not have access to this event's training plan");
 
         // Mirrors GetByIdWithDetailsAsync — the same drill payload whichever way a plan is

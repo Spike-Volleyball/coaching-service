@@ -34,6 +34,7 @@ public class DrillService : IDrillService
     private readonly ILogger<DrillService> _logger;
     private readonly IDrillDialReconciler _dialReconciler;
     private readonly IAnalyticsCapture _analytics;
+    private readonly IDrillReadGrants _readGrants;
 
     /// <summary>
     /// The most rows one import request may carry. Public because the ceiling is part of the
@@ -53,7 +54,8 @@ public class DrillService : IDrillService
         IMapper mapper,
         ILogger<DrillService> logger,
         IDrillDialReconciler dialReconciler,
-        IAnalyticsCapture analytics)
+        IAnalyticsCapture analytics,
+        IDrillReadGrants readGrants)
     {
         _drillRepository = drillRepository;
         _likeRepository = likeRepository;
@@ -67,6 +69,7 @@ public class DrillService : IDrillService
         _logger = logger;
         _dialReconciler = dialReconciler;
         _analytics = analytics;
+        _readGrants = readGrants;
     }
 
     public async Task<PagedResponse<DrillDto>> GetByFilterAsync(DrillFilterRequest filter, Guid? userId = null)
@@ -126,11 +129,13 @@ public class DrillService : IDrillService
         return PagedResponse<DrillDto>.Create(dtos, totalCount, filter.Page, filter.Limit);
     }
 
-    public async Task<DrillDto> GetByIdAsync(Guid id, Guid userId)
+    public async Task<DrillDto> GetByIdAsync(Guid id, Guid userId, DrillReadContext? context = null)
     {
         // A drill this reader may not see answers exactly as a missing one does.
         var drill = await _drillRepository.GetByIdWithDetailsAsync(id);
-        if (drill == null || !await IsReadableAsync(drill, userId))
+        if (drill == null
+            || (!await IsReadableAsync(drill, userId)
+                && (context is null || !await _readGrants.GrantsAsync(drill.Id, userId, context))))
             throw new EntityNotFoundException("Drill not found");
 
         var dto = _mapper.Map<DrillDto>(drill);
@@ -343,8 +348,8 @@ public class DrillService : IDrillService
 
     private static Drill BuildImportedDrill(ImportDrillRowDto row, ImportDrillsDto request, Guid userId)
     {
-        var instructions = DrillRichText.Resolve(null, row.Instructions, ordered: true);
-        var coachingPoints = DrillRichText.Resolve(null, row.CoachingPoints, ordered: false);
+        var instructions = ImportedProse.Instructions(row.Instructions, request.DirectionsStyle);
+        var coachingPoints = ImportedProse.CoachingPoints(row.CoachingPoints);
 
         var drill = new Drill
         {
