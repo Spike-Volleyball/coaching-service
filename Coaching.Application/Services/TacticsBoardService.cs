@@ -26,6 +26,10 @@ public class TacticsBoardService(
     /// </summary>
     public const int MaxDocumentLength = 2_000_000;
 
+    /// <summary>The most tools a board may name, and the longest a name may be: the editor has a handful, each a word.</summary>
+    public const int MaxTools = 16;
+    public const int MaxToolLength = 32;
+
     public async Task<IReadOnlyList<TacticsBoardDto>> ListBoardsAsync(TacticsShelfQuery query, Guid userId)
     {
         var shelf = await TacticsAccess.EnsureMayUseAsync(
@@ -54,11 +58,13 @@ public class TacticsBoardService(
     {
         var title = Require(request.Title, "A board needs a title", TacticsBoard.TitleMaxLength);
         var document = ValidDocument(request.Document);
+        var tools = ValidTools(request.Tools);
         var shelf = await TacticsAccess.EnsureMayUseAsync(
             TacticsAccess.ShelfOf(request.Scope, request.ClubId, request.TeamId), userId, clubs);
         var folderId = await FolderOnShelfAsync(request.FolderId, shelf, userId);
 
         var board = await boards.GetByIdAsync(boardId);
+        var isNew = board is null;
         if (board is null)
         {
             board = new TacticsBoard
@@ -68,20 +74,10 @@ public class TacticsBoardService(
                 Category = string.Empty,
                 System = string.Empty,
                 Document = document,
-                OwnerUserId = userId
+                OwnerUserId = userId,
+                Origin = TacticsBoardOrigin.Made
             };
             boards.Add(board);
-
-            // Published before the save, which is what puts it in the outbox. Seeding sends none: a
-            // starter board is not its owner's work.
-            var now = timeProvider.GetUtcNow().UtcDateTime;
-            await publishEndpoint.Publish(new TacticsBoardCreatedEvent
-            {
-                BoardId = boardId,
-                CreatorUserId = userId,
-                CreatedAt = now,
-                SnapshotAt = now
-            });
         }
         else
         {
@@ -105,11 +101,48 @@ public class TacticsBoardService(
         board.Document = document;
         board.Version++;
 
+        // Before the save, which is what puts the message in the outbox.
+        await PublishDrawingAsync(board, tools, isNew, userId);
         await boards.SaveChangesAsync();
 
         var dto = Summary(board);
         dto.Document = board.Document;
         return dto;
+    }
+
+    /// <summary>
+    /// Tells of a board somebody made once it has a drawing on it, and at every save from then on.
+    ///
+    /// A new board is saved blank, before anything is drawn on it, so the save that makes one counts
+    /// only when it already uses a tool or has a second scene (a copy, an import, a board drawn
+    /// before its first save). Any later save by its maker is the drawing. A starter never tells,
+    /// nor a board from before origins were kept.
+    /// </summary>
+    private async Task PublishDrawingAsync(TacticsBoard board, IReadOnlyList<string> tools, bool isNew, Guid userId)
+    {
+        if (board.Origin != TacticsBoardOrigin.Made)
+            return;
+
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        if (board.DrawnAt is null)
+        {
+            var hasDrawing = !isNew || tools.Count > 0 || board.FrameCount > 1;
+            if (userId != board.OwnerUserId || !hasDrawing)
+                return;
+
+            // To the microsecond, which is all the database keeps: the first copy then says what
+            // every later one, read back from it, will.
+            board.DrawnAt = now.AddTicks(-(now.Ticks % TimeSpan.TicksPerMicrosecond));
+        }
+
+        await publishEndpoint.Publish(new TacticsBoardDrawnEvent
+        {
+            BoardId = board.Id,
+            MakerUserId = board.OwnerUserId,
+            DrawnAt = board.DrawnAt.Value,
+            Tools = tools,
+            SnapshotAt = now
+        });
     }
 
     public async Task DeleteBoardAsync(Guid boardId, Guid userId)
@@ -150,6 +183,7 @@ public class TacticsBoardService(
             FrameCount = Math.Max(board.FrameCount, 0),
             Document = ValidDocument(board.Document),
             OwnerUserId = userId,
+            Origin = TacticsBoardOrigin.Starter,
             Version = 1
         }).ToList();
 
@@ -440,6 +474,15 @@ public class TacticsBoardService(
     /// The column is jsonb, so anything that is not JSON fails in the driver as a 500. Parsing it
     /// here turns that into the 400 it actually is.
     /// </summary>
+    private static IReadOnlyList<string> ValidTools(IReadOnlyList<string>? tools)
+    {
+        var named = (tools ?? []).Select(tool => tool?.Trim().ToLowerInvariant() ?? string.Empty).Distinct().ToList();
+        if (named.Count > MaxTools || named.Any(tool => tool.Length is 0 or > MaxToolLength))
+            throw new BadRequestException("That is not a list of a board's tools", ErrorCodeEnum.ValidationError);
+
+        return named;
+    }
+
     private static string ValidDocument(string? document)
     {
         if (string.IsNullOrWhiteSpace(document))
