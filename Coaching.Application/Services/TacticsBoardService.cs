@@ -4,17 +4,21 @@ using Coaching.Application.DTOs.Tactics;
 using Coaching.Application.Interfaces.Services;
 using Coaching.Domain.Enums;
 using Coaching.Domain.Models.Tactics;
+using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using Shared.DataAccess.Repositories.Interfaces;
 using Shared.Enums;
 using Shared.Exceptions;
+using Shared.Messaging.Contracts.Events.Coaching;
 
 namespace Coaching.Application.Services;
 
 public class TacticsBoardService(
     IRepository<TacticsBoard> boards,
     IRepository<TacticsFolder> folders,
-    IClubsGrpcClient clubs) : ITacticsBoardService
+    IClubsGrpcClient clubs,
+    IPublishEndpoint publishEndpoint,
+    TimeProvider timeProvider) : ITacticsBoardService
 {
     /// <summary>
     /// The largest board the server will store. A busy board is tens of kilobytes; this is the
@@ -67,6 +71,17 @@ public class TacticsBoardService(
                 OwnerUserId = userId
             };
             boards.Add(board);
+
+            // Published before the save, which is what puts it in the outbox. Seeding sends none: a
+            // starter board is not its owner's work.
+            var now = timeProvider.GetUtcNow().UtcDateTime;
+            await publishEndpoint.Publish(new TacticsBoardCreatedEvent
+            {
+                BoardId = boardId,
+                CreatorUserId = userId,
+                CreatedAt = now,
+                SnapshotAt = now
+            });
         }
         else
         {
