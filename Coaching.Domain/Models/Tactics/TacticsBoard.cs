@@ -45,6 +45,25 @@ public class TacticsBoard : BaseEntity
     /// </summary>
     public int Version { get; set; }
 
+    /// <summary>
+    /// What its drawing uses, as the editor named its tools at the last save: the kinds of mark on
+    /// it and the analysis switched on. Denormalised from the document like the scene count, and
+    /// for the same reason: nothing here reads the document.
+    /// </summary>
+    public List<string> Tools { get; set; } = [];
+
+    /// <summary>
+    /// Whether somebody made it or a new shelf was seeded with it. A starter is nobody's own work,
+    /// however much it is edited afterwards.
+    /// </summary>
+    public TacticsBoardOrigin Origin { get; set; }
+
+    /// <summary>
+    /// When its maker first saved it with a drawing on it. Null until then, and always on a board
+    /// nobody made.
+    /// </summary>
+    public DateTime? DrawnAt { get; set; }
+
     /// <summary>The whole board as JSON, exactly as the editor holds it.</summary>
     public required string Document { get; set; }
 }
