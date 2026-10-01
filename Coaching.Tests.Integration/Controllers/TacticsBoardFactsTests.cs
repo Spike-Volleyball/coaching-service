@@ -5,6 +5,7 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using Coaching.Application.DTOs.Facts;
 using Coaching.Application.Services;
 using Coaching.Domain.Enums;
 using Coaching.Domain.Models.Tactics;
@@ -12,24 +13,30 @@ using Coaching.Infrastructure.Data.Context;
 using Coaching.Tests.Integration.Fixtures;
 using FluentAssertions;
 using MassTransit.EntityFrameworkCoreIntegration;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using NSubstitute;
 using NSubstitute.ClearExtensions;
 using Shared.Messaging.Contracts.Events.Coaching;
+using Shared.Microservices.Authorization;
 
 namespace Coaching.Tests.Integration.Controllers;
 
 /// <summary>
-/// A board somebody made reaches the outbox once it has a drawing on it, and again at every save
-/// after, with the tools it uses then. A blank new board waits for its drawing, and a starter board
-/// or one from before origins were kept never tells at all.
+/// A board somebody made reaches the outbox once it has a drawing on it, and again whenever a save
+/// changes the tools it uses. A blank new board waits for its drawing, and a starter board or one
+/// from before origins were kept never tells at all. The admin console republishes the same
+/// snapshots for a backfill.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
 public class TacticsBoardFactsTests
 {
     private const string Document = """{"frames":[{"id":"f1"}],"system":"5-1"}""";
+    private const string ConsoleKey = "tactics-board-facts-tests-admin-console-key";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -37,6 +44,7 @@ public class TacticsBoardFactsTests
     };
 
     private CoachingApiFactory _factory = null!;
+    private WebApplicationFactory<Program> _host = null!;
     private HttpClient _client = null!;
 
     [OneTimeSetUp]
@@ -44,13 +52,16 @@ public class TacticsBoardFactsTests
     {
         _factory = new CoachingApiFactory(isolateMessageBroker: true);
         await _factory.InitializeAsync();
-        _client = _factory.CreateClient();
+        _host = _factory.WithWebHostBuilder(b => b.ConfigureAppConfiguration(config => config.AddInMemoryCollection(
+            new Dictionary<string, string?> { ["AdminConsole:ApiKey"] = ConsoleKey })));
+        _client = _host.CreateClient();
     }
 
     [OneTimeTearDown]
     public async Task OneTimeTearDown()
     {
         _client.Dispose();
+        await _host.DisposeAsync();
         await _factory.DisposeAsync();
     }
 
@@ -98,7 +109,9 @@ public class TacticsBoardFactsTests
         drawn.Tools.Should().Equal("arrow", "heatmap");
         drawn.DrawnAt.Should().BeCloseTo(DateTime.UtcNow, TimeSpan.FromMinutes(1));
         drawn.SnapshotAt.Should().BeCloseTo(drawn.DrawnAt, TimeSpan.FromMilliseconds(1));
-        (await StoredAsync(boardId)).DrawnAt.Should().Be(drawn.DrawnAt);
+        var stored = await StoredAsync(boardId);
+        stored.DrawnAt.Should().Be(drawn.DrawnAt);
+        stored.Tools.Should().Equal("arrow", "heatmap");
     }
 
     [TestCase(new[] { "projection" }, 1, TestName = "SaveBoard_ANewBoardThatUsesATool_IsDrawnAlready")]
@@ -117,7 +130,7 @@ public class TacticsBoardFactsTests
     }
 
     [Test]
-    public async Task SaveBoard_EverySaveAfterTheDrawing_SendsWhatItUsesThen_FromTheSameMoment()
+    public async Task SaveBoard_ASaveThatChangesItsTools_SendsWhatItUsesThen_FromTheSameMoment()
     {
         // Arrange
         var boardId = Guid.NewGuid();
@@ -133,6 +146,21 @@ public class TacticsBoardFactsTests
         sent.Select(copy => string.Join(",", copy.Tools)).Should().Equal("arrow", "arrow,heatmap,projection", "");
         sent.Select(copy => copy.DrawnAt).Distinct().Should().ContainSingle();
         sent.Select(copy => copy.SnapshotAt).Should().BeInAscendingOrder();
+    }
+
+    [Test]
+    public async Task SaveBoard_ASaveThatChangesNoTool_SendsNothingMore()
+    {
+        // Arrange
+        var boardId = Guid.NewGuid();
+        SetAuth(Guid.NewGuid());
+        await SaveAsync(boardId, tools: ["arrow", "heatmap"]);
+
+        // Act — a rename, and the same tools named in another order.
+        await SaveAsync(boardId, expectedVersion: 1, tools: ["heatmap", "arrow"], title: "Serve receive, revised");
+
+        // Assert
+        (await OutboxAsync()).Should().ContainSingle();
     }
 
     [Test]
@@ -252,6 +280,33 @@ public class TacticsBoardFactsTests
         sent[1].Tools.Should().Equal("arrow", "ink", "heatmap");
     }
 
+    [Test]
+    public async Task Republish_WithTheConsoleKey_PublishesEveryDrawnBoardAgainAndCountsThem()
+    {
+        // Arrange — one board drawn, one still blank, one starter: only the first has anything to say.
+        var drawnId = Guid.NewGuid();
+        SetAuth(Guid.NewGuid());
+        await SaveAsync(drawnId, tools: ["arrow", "projection"]);
+        await SaveAsync(Guid.NewGuid());
+        var live = (await OutboxAsync()).Should().ContainSingle().Subject;
+        _client.DefaultRequestHeaders.Authorization = null;
+
+        // Act
+        var request = new HttpRequestMessage(HttpMethod.Post, "/v1/admin/facts/republish");
+        request.Headers.Add(AdminConsoleKey.HeaderName, ConsoleKey);
+        var response = await _client.SendAsync(request);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        (await response.Content.ReadFromJsonAsync<FactsRepublishedDto>(JsonOptions))!.Boards.Should().Be(1);
+        var again = (await OutboxAsync()).Skip(1).Should().ContainSingle().Subject;
+        again.SnapshotAt.Should().BeOnOrAfter(live.SnapshotAt);
+        again.Should().BeEquivalentTo(live, o => o
+            .Excluding(copy => copy.EventId)
+            .Excluding(copy => copy.Timestamp)
+            .Excluding(copy => copy.SnapshotAt));
+    }
+
     /// <summary>
     /// Every copy the outbox holds, in the order it was published. A row's body is the MassTransit
     /// envelope, with the message itself under "message".
@@ -292,10 +347,11 @@ public class TacticsBoardFactsTests
         string[]? tools = null,
         int frameCount = 1,
         string scope = "personal",
-        Guid? clubId = null) =>
+        Guid? clubId = null,
+        string title = "Serve receive") =>
         _client.PutAsJsonAsync($"/v1/tactics-boards/{boardId}", new
         {
-            title = "Serve receive",
+            title,
             category = "Match day",
             system = "5-1",
             scope,
@@ -313,9 +369,10 @@ public class TacticsBoardFactsTests
         string[]? tools = null,
         int frameCount = 1,
         string scope = "personal",
-        Guid? clubId = null)
+        Guid? clubId = null,
+        string title = "Serve receive")
     {
-        var response = await PutAsync(boardId, expectedVersion, tools, frameCount, scope, clubId);
+        var response = await PutAsync(boardId, expectedVersion, tools, frameCount, scope, clubId, title);
         response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
     }
 

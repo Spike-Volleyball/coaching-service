@@ -20,8 +20,9 @@ namespace Coaching.Controllers.V1;
 public class AdminController(IFactRepublisher republisher, IImportedProseRebuilder proseRebuilder) : ControllerBase
 {
     /// <summary>
-    /// Publishes the praise snapshot of every piece of feedback a player can see again, for a
-    /// consumer to backfill from. Answers with how many went out.
+    /// Publishes the praise snapshot of every piece of feedback a player can see again, and the
+    /// snapshot of every tactics board somebody drew, for a consumer to backfill from. Answers with
+    /// how many of each went out.
     /// </summary>
     [HttpPost("facts/republish")]
     public async Task<IActionResult> RepublishFacts(CancellationToken ct) =>

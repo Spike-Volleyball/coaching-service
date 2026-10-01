@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -23,6 +24,13 @@ namespace Coaching.Infrastructure.Migrations
                 type: "integer",
                 nullable: false,
                 defaultValue: 0);
+
+            migrationBuilder.AddColumn<List<string>>(
+                name: "Tools",
+                table: "TacticsBoards",
+                type: "text[]",
+                nullable: false,
+                defaultValueSql: "'{}'");
         }
 
         /// <inheritdoc />
@@ -34,6 +42,10 @@ namespace Coaching.Infrastructure.Migrations
 
             migrationBuilder.DropColumn(
                 name: "Origin",
+                table: "TacticsBoards");
+
+            migrationBuilder.DropColumn(
+                name: "Tools",
                 table: "TacticsBoards");
         }
     }

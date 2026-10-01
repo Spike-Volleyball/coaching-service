@@ -2,6 +2,7 @@ using System.Linq.Expressions;
 using System.Text.Json;
 using Coaching.Application.DTOs.Tactics;
 using Coaching.Application.Interfaces.Services;
+using Coaching.Application.Services.Facts;
 using Coaching.Domain.Enums;
 using Coaching.Domain.Models.Tactics;
 using MassTransit;
@@ -9,7 +10,6 @@ using Microsoft.EntityFrameworkCore;
 using Shared.DataAccess.Repositories.Interfaces;
 using Shared.Enums;
 using Shared.Exceptions;
-using Shared.Messaging.Contracts.Events.Coaching;
 
 namespace Coaching.Application.Services;
 
@@ -101,8 +101,11 @@ public class TacticsBoardService(
         board.Document = document;
         board.Version++;
 
+        var toolsChanged = !board.Tools.ToHashSet().SetEquals(tools);
+        board.Tools = tools;
+
         // Before the save, which is what puts the message in the outbox.
-        await PublishDrawingAsync(board, tools, isNew, userId);
+        await PublishDrawingAsync(board, toolsChanged, isNew, userId);
         await boards.SaveChangesAsync();
 
         var dto = Summary(board);
@@ -111,38 +114,36 @@ public class TacticsBoardService(
     }
 
     /// <summary>
-    /// Tells of a board somebody made once it has a drawing on it, and at every save from then on.
+    /// Tells of a board somebody made once it has a drawing on it, and again whenever a save changes
+    /// the tools that drawing uses.
     ///
     /// A new board is saved blank, before anything is drawn on it, so the save that makes one counts
     /// only when it already uses a tool or has a second scene (a copy, an import, a board drawn
     /// before its first save). Any later save by its maker is the drawing. A starter never tells,
     /// nor a board from before origins were kept.
     /// </summary>
-    private async Task PublishDrawingAsync(TacticsBoard board, IReadOnlyList<string> tools, bool isNew, Guid userId)
+    private async Task PublishDrawingAsync(TacticsBoard board, bool toolsChanged, bool isNew, Guid userId)
     {
         if (board.Origin != TacticsBoardOrigin.Made)
             return;
 
         var now = timeProvider.GetUtcNow().UtcDateTime;
-        if (board.DrawnAt is null)
+        if (board.DrawnAt is { } drawnAt)
         {
-            var hasDrawing = !isNew || tools.Count > 0 || board.FrameCount > 1;
-            if (userId != board.OwnerUserId || !hasDrawing)
-                return;
-
-            // To the microsecond, which is all the database keeps: the first copy then says what
-            // every later one, read back from it, will.
-            board.DrawnAt = now.AddTicks(-(now.Ticks % TimeSpan.TicksPerMicrosecond));
+            if (toolsChanged)
+                await publishEndpoint.Publish(DrawnBoardFact.Snapshot(board, drawnAt, now));
+            return;
         }
 
-        await publishEndpoint.Publish(new TacticsBoardDrawnEvent
-        {
-            BoardId = board.Id,
-            MakerUserId = board.OwnerUserId,
-            DrawnAt = board.DrawnAt.Value,
-            Tools = tools,
-            SnapshotAt = now
-        });
+        var hasDrawing = !isNew || board.Tools.Count > 0 || board.FrameCount > 1;
+        if (userId != board.OwnerUserId || !hasDrawing)
+            return;
+
+        // To the microsecond, which is all the database keeps: the first copy then says what every
+        // later one, read back from it, will.
+        var firstDrawn = now.AddTicks(-(now.Ticks % TimeSpan.TicksPerMicrosecond));
+        board.DrawnAt = firstDrawn;
+        await publishEndpoint.Publish(DrawnBoardFact.Snapshot(board, firstDrawn, now));
     }
 
     public async Task DeleteBoardAsync(Guid boardId, Guid userId)
@@ -474,7 +475,7 @@ public class TacticsBoardService(
     /// The column is jsonb, so anything that is not JSON fails in the driver as a 500. Parsing it
     /// here turns that into the 400 it actually is.
     /// </summary>
-    private static IReadOnlyList<string> ValidTools(IReadOnlyList<string>? tools)
+    private static List<string> ValidTools(IReadOnlyList<string>? tools)
     {
         var named = (tools ?? []).Select(tool => tool?.Trim().ToLowerInvariant() ?? string.Empty).Distinct().ToList();
         if (named.Count > MaxTools || named.Any(tool => tool.Length is 0 or > MaxToolLength))
