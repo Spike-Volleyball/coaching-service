@@ -137,17 +137,22 @@ public class GuardianDelegationTests
     }
 
     [Test]
-    public async Task GetEventPlan_ActingAsYourself_Returns400()
+    public async Task GetEventPlan_NamingYourselfInTheHeader_IsEvaluatedForTheCallerWithoutAGuardianLookup()
     {
-        // Arrange
-        var (eventId, _) = await SeedEventPlanAsync();
-        SetAuth(GuardianId);
+        // Arrange — installed app builds send the caller's own id (SPI-6662): it asks for nothing
+        // the request without the header does not, and is answered as one.
+        var (eventId, planId) = await SeedEventPlanAsync();
+        _factory.EventsGrpcClient.IsEventParticipantAsync(eventId, WardId).Returns((true, true));
+        SetAuth(WardId);
 
         // Act
-        var response = await SendActingAs($"/v1/events/{eventId}/plans", GuardianId);
+        var response = await SendActingAs($"/v1/events/{eventId}/plans", WardId);
 
         // Assert
-        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var plan = await response.Content.ReadFromJsonAsync<TrainingPlanDetailDto>(JsonOptions);
+        plan!.Id.Should().Be(planId);
+        await _factory.GuardianCacheService.DidNotReceive().HasAccessWithCacheAsync(Arg.Any<Guid>(), Arg.Any<Guid>());
     }
 
     // ---------- Helpers ----------
