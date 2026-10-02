@@ -7,7 +7,8 @@ namespace Coaching.Application.Services;
 /// the other — a club owner, a head coach covering it, the coach of the group it belongs to are
 /// not participants, and all of them need the plan. IsEventParticipant stays a question about
 /// attendance, so the second arm is asked separately rather than by widening "participant" for
-/// every other caller. The plan's own GET and the drill read it vouches for both ask here.
+/// every other caller. The plan's own GET, its comments and the drill read it vouches for all ask
+/// here.
 /// </summary>
 public static class EventPlanAccess
 {

@@ -1087,7 +1087,8 @@ public class TrainingPlanService : ITrainingPlanService
 
     /// <summary>
     /// Authorizes comment access based on plan type.
-    /// Instance plans: user must be a participant of the linked event.
+    /// Instance plans: whoever may read the linked event's plan may discuss it, so the club's
+    /// staff and the event's hosts comment without being on its roster.
     /// Template plans: open access (public templates are commentable by anyone).
     /// </summary>
     private async Task AuthorizePlanCommentAccess(TrainingPlan plan, Guid userId)
@@ -1097,11 +1098,11 @@ public class TrainingPlanService : ITrainingPlanService
             if (plan.EventId == null)
                 throw new BadRequestException("Instance plan has no linked event", ErrorCodeEnum.ValidationError);
 
-            var (isParticipant, eventExists) = await _eventsGrpcClient.IsEventParticipantAsync(plan.EventId.Value, userId);
+            var (eventExists, mayRead) = await EventPlanAccess.StandingAsync(_eventsGrpcClient, plan.EventId.Value, userId);
             if (!eventExists)
                 throw new EntityNotFoundException("The linked event no longer exists");
-            if (!isParticipant)
-                throw new ForbiddenException("Only event participants can comment on this plan");
+            if (!mayRead)
+                throw new ForbiddenException("Only the event's participants, hosts and club staff can comment on this plan");
         }
         // Template plans: open access, no additional check needed
     }
