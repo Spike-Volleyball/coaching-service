@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using Coaching.Domain.Enums;
 using Shared.Models;
 
@@ -51,4 +52,14 @@ public class TrainingPlan : BaseEntity
 
     /// <summary>Where each activity happens, per venue. Only an event's plan has any.</summary>
     public virtual ICollection<PlanItemPlacement> Placements { get; set; } = new List<PlanItemPlacement>();
+
+    /// <summary>
+    /// Who may read a template: anyone when it is public, its author when it is private. Its likes,
+    /// bookmarks and comments follow the same rule, and so do the lists built from them, so a
+    /// template taken private leaves everyone else's (SPI-6801).
+    /// </summary>
+    public static Expression<Func<TrainingPlan, bool>> TemplateReadableBy(Guid userId) =>
+        plan => !plan.IsDeleted
+            && plan.PlanType == PlanType.Template
+            && (plan.Visibility == TemplateVisibility.Public || plan.CreatedByUserId == userId);
 }

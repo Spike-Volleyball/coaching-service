@@ -705,9 +705,12 @@ public class DrillService : IDrillService
 
     public async Task<IEnumerable<BookmarkedDrillDto>> GetUserBookmarksAsync(Guid userId)
     {
-        var bookmarks = await _bookmarkRepository.GetByUserAsync(userId);
+        var bookmarks = (await _bookmarkRepository.GetByUserAsync(userId)).ToList();
+        // A bookmark outlives the reader's right to the drill (taken private, a club left), and the
+        // list must not keep showing what the drill page would refuse (SPI-6801).
+        var readable = await Task.WhenAll(bookmarks.Select(b => IsReadableAsync(b.Drill, userId)));
 
-        return bookmarks.Select(b => new BookmarkedDrillDto
+        return bookmarks.Where((_, i) => readable[i]).Select(b => new BookmarkedDrillDto
         {
             Id = b.Drill.Id,
             Name = b.Drill.Name,
