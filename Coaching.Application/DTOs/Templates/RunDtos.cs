@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using Coaching.Domain.Enums;
 
 namespace Coaching.Application.DTOs.Templates;
@@ -19,13 +20,24 @@ public class RunDto
     public DateTime StartedAt { get; set; }
     public DateTime? CompletedAt { get; set; }
 
+    // Moves on by itself when a step's time is up, except from the last step.
+    public bool AutoAdvance { get; set; }
+
     // Server "now" so each client computes a clock offset.
     public DateTime ServerTime { get; set; }
 
-    // True when the requesting user is the plan creator (may control the run).
+    // Whether the reader may control the run: the plan's creator or an event admin.
     public bool CanControl { get; set; }
 
     public List<RunItemDto> Items { get; set; } = new();
+
+    /// <summary>The same run as told to someone who may, or may not, control it.</summary>
+    public RunDto WithCanControl(bool canControl)
+    {
+        var copy = (RunDto)MemberwiseClone();
+        copy.CanControl = canControl;
+        return copy;
+    }
 }
 
 public class RunItemDto
@@ -68,5 +80,38 @@ public class RunStationItemDto
     public string? Notes { get; set; }
 }
 
-// Body for POST .../run/advance — guards against double-tap / concurrent advance.
-public record AdvanceRunDto(Guid FromItemId);
+/// <summary>
+/// Optional body for POST .../run/pause, /resume, /complete and /reopen. <paramref name="OccurredAt"/>
+/// is when the tap was made, for one queued offline; absent means now.
+/// </summary>
+public record RunTapDto(DateTimeOffset? OccurredAt = null);
+
+/// <summary>
+/// Body for POST .../run/advance. <paramref name="FromItemId"/> is the plan item id the caller saw
+/// current, which guards against a double or stale tap.
+/// </summary>
+public record AdvanceRunDto(Guid FromItemId, DateTimeOffset? OccurredAt = null);
+
+/// <summary>
+/// Body for POST .../run/goto: from the plan item id the caller saw current (guarded as for
+/// advance) to any other of the run's plan item ids.
+/// </summary>
+public record GoToRunDto(Guid FromItemId, Guid ToItemId, DateTimeOffset? OccurredAt = null);
+
+/// <summary>
+/// Optional body for POST .../run/start. A run that is Running or Paused is only started over
+/// when <paramref name="Restart"/> says so; a finished one starts over either way.
+/// <paramref name="AutoAdvance"/> sets whether the run moves on by itself; absent, a new run
+/// starts without it and a run started over keeps what it had.
+/// </summary>
+public record StartRunDto(bool Restart = false, bool? AutoAdvance = null);
+
+/// <summary>
+/// Body for POST .../run/auto-advance: whether the run moves on by itself from now on. Required,
+/// so a body that says nothing is refused rather than read as off. <paramref name="OccurredAt"/> is
+/// when the switch was tapped, for one queued offline, as for the other controls; absent means now.
+/// </summary>
+public record RunAutoAdvanceDto([Required] bool? Enabled, DateTimeOffset? OccurredAt = null);
+
+/// <summary>What the caller may do with an event's run, answerable before any run exists.</summary>
+public record RunPermissionsDto(bool CanControl);

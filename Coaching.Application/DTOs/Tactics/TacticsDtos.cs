@@ -61,6 +61,13 @@ public record SaveTacticsBoardRequest
     public string Document { get; init; } = string.Empty;
 
     /// <summary>
+    /// What the drawing uses, as the editor names its tools: the kinds of mark on it and the
+    /// analysis switched on. Sent beside the document, as the scene count is, so the server need
+    /// not read it. Absent from a client too old to say.
+    /// </summary>
+    public IReadOnlyList<string>? Tools { get; init; }
+
+    /// <summary>
     /// The version the client last read. Absent on a first save; present afterwards, and a value
     /// behind the stored one is refused so a second coach's work is not silently overwritten.
     /// </summary>

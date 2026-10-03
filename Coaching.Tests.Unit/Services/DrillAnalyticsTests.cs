@@ -66,7 +66,8 @@ public class DrillAnalyticsTests
             mapper,
             Substitute.For<ILogger<DrillService>>(),
             _dialReconciler,
-            _analytics);
+            _analytics,
+            Substitute.For<IDrillReadGrants>());
     }
 
     [Test]

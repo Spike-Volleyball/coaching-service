@@ -389,17 +389,12 @@ public class TrainingPlanService : ITrainingPlanService
 
     public async Task<TrainingPlanDetailDto?> GetByEventIdAsync(Guid eventId, Guid userId)
     {
-        var (isParticipant, eventExists) = await _eventsGrpcClient.IsEventParticipantAsync(eventId, userId);
+        var (eventExists, mayRead) = await EventPlanAccess.StandingAsync(_eventsGrpcClient, eventId, userId);
 
         if (!eventExists)
             throw new EntityNotFoundException("Event not found");
 
-        // Being at the session is one way in; being responsible for it is the other. A club owner,
-        // a head coach covering it, the coach of the group it belongs to — none of them are
-        // participants, and all of them need to read the plan. IsEventParticipant deliberately
-        // stays a question about attendance, so the second arm is asked separately rather than by
-        // widening what "participant" means for every other caller.
-        if (!isParticipant && !await _eventsGrpcClient.IsEventAdminAsync(eventId, userId))
+        if (!mayRead)
             throw new ForbiddenException("You do not have access to this event's training plan");
 
         // Mirrors GetByIdWithDetailsAsync — the same drill payload whichever way a plan is
@@ -850,7 +845,7 @@ public class TrainingPlanService : ITrainingPlanService
 
     public async Task<PlanLikeStatusDto> LikeAsync(Guid planId, Guid userId)
     {
-        await ValidateIsTemplate(planId);
+        await EnsureTemplateReadableAsync(planId, userId);
 
         var plan = await _planRepository.GetByIdAsync(planId);
         if (plan == null)
@@ -891,7 +886,7 @@ public class TrainingPlanService : ITrainingPlanService
 
     public async Task<PlanLikeStatusDto> UnlikeAsync(Guid planId, Guid userId)
     {
-        await ValidateIsTemplate(planId);
+        await EnsureTemplateReadableAsync(planId, userId);
 
         var plan = await _planRepository.GetByIdAsync(planId);
         if (plan == null)
@@ -924,6 +919,8 @@ public class TrainingPlanService : ITrainingPlanService
 
     public async Task<PlanLikeStatusDto> GetLikeStatusAsync(Guid planId, Guid userId)
     {
+        await EnsureTemplateReadableAsync(planId, userId);
+
         var plan = await _planRepository.GetByIdAsync(planId);
         if (plan == null)
             throw new EntityNotFoundException("Plan not found");
@@ -943,7 +940,7 @@ public class TrainingPlanService : ITrainingPlanService
 
     public async Task<PlanBookmarkStatusDto> BookmarkAsync(Guid planId, Guid userId)
     {
-        await ValidateIsTemplate(planId);
+        await EnsureTemplateReadableAsync(planId, userId);
 
         var plan = await _planRepository.GetByIdAsync(planId);
         if (plan == null)
@@ -971,7 +968,7 @@ public class TrainingPlanService : ITrainingPlanService
 
     public async Task<PlanBookmarkStatusDto> UnbookmarkAsync(Guid planId, Guid userId)
     {
-        await ValidateIsTemplate(planId);
+        await EnsureTemplateReadableAsync(planId, userId);
 
         var existingBookmark = await _bookmarkRepository.GetByTemplateAndUserAsync(planId, userId);
         if (existingBookmark == null)
@@ -1092,8 +1089,9 @@ public class TrainingPlanService : ITrainingPlanService
 
     /// <summary>
     /// Authorizes comment access based on plan type.
-    /// Instance plans: user must be a participant of the linked event.
-    /// Template plans: open access (public templates are commentable by anyone).
+    /// Instance plans: whoever may read the linked event's plan may discuss it, so the club's
+    /// staff and the event's hosts comment without being on its roster.
+    /// Template plans: whoever may read the template (<see cref="TrainingPlan.TemplateReadableBy"/>).
     /// </summary>
     private async Task AuthorizePlanCommentAccess(TrainingPlan plan, Guid userId)
     {
@@ -1102,23 +1100,27 @@ public class TrainingPlanService : ITrainingPlanService
             if (plan.EventId == null)
                 throw new BadRequestException("Instance plan has no linked event", ErrorCodeEnum.ValidationError);
 
-            var (isParticipant, eventExists) = await _eventsGrpcClient.IsEventParticipantAsync(plan.EventId.Value, userId);
+            var (eventExists, mayRead) = await EventPlanAccess.StandingAsync(_eventsGrpcClient, plan.EventId.Value, userId);
             if (!eventExists)
                 throw new EntityNotFoundException("The linked event no longer exists");
-            if (!isParticipant)
-                throw new ForbiddenException("Only event participants can comment on this plan");
+            if (!mayRead)
+                throw new ForbiddenException("Only the event's participants, hosts and club staff can comment on this plan");
+            return;
         }
-        // Template plans: open access, no additional check needed
+
+        await EnsureTemplateReadableAsync(plan.Id, userId);
     }
 
     /// <summary>
-    /// Validates that the plan exists and is a Template (not an Instance).
-    /// Call at the top of social methods to enforce that social features are template-only.
+    /// A template's likes, bookmarks and comments are open to whoever may read it. To anyone else,
+    /// and for an event's plan, which has none of them, the answer is a missing plan's (SPI-6801).
     /// </summary>
-    private async Task ValidateIsTemplate(Guid planId)
+    private async Task EnsureTemplateReadableAsync(Guid planId, Guid userId)
     {
-        var plan = await _planRepository.GetByIdAsync(planId);
-        if (plan == null || plan.PlanType != PlanType.Template)
+        var readable = await _planRepository.Query()
+            .Where(p => p.Id == planId)
+            .AnyAsync(TrainingPlan.TemplateReadableBy(userId));
+        if (!readable)
             throw new EntityNotFoundException("Plan not found");
     }
 

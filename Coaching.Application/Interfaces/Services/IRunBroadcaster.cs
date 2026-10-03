@@ -8,5 +8,9 @@ namespace Coaching.Application.Interfaces.Services;
 /// </summary>
 public interface IRunBroadcaster
 {
+    /// <summary>
+    /// Sends <paramref name="run"/> to the run's controllers with CanControl set and to its viewers
+    /// without — whatever CanControl it carries is its caller's own answer, not theirs.
+    /// </summary>
     Task BroadcastRunUpdatedAsync(Guid eventId, RunDto run);
 }

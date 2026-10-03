@@ -2,8 +2,10 @@ using System.Linq.Expressions;
 using System.Text.Json;
 using Coaching.Application.DTOs.Tactics;
 using Coaching.Application.Interfaces.Services;
+using Coaching.Application.Services.Facts;
 using Coaching.Domain.Enums;
 using Coaching.Domain.Models.Tactics;
+using MassTransit;
 using Microsoft.EntityFrameworkCore;
 using Shared.DataAccess.Repositories.Interfaces;
 using Shared.Enums;
@@ -14,13 +16,19 @@ namespace Coaching.Application.Services;
 public class TacticsBoardService(
     IRepository<TacticsBoard> boards,
     IRepository<TacticsFolder> folders,
-    IClubsGrpcClient clubs) : ITacticsBoardService
+    IClubsGrpcClient clubs,
+    IPublishEndpoint publishEndpoint,
+    TimeProvider timeProvider) : ITacticsBoardService
 {
     /// <summary>
     /// The largest board the server will store. A busy board is tens of kilobytes; this is the
     /// ceiling that stops a runaway client filling a column nobody can read back.
     /// </summary>
     public const int MaxDocumentLength = 2_000_000;
+
+    /// <summary>The most tools a board may name, and the longest a name may be: the editor has a handful, each a word.</summary>
+    public const int MaxTools = 16;
+    public const int MaxToolLength = 32;
 
     public async Task<IReadOnlyList<TacticsBoardDto>> ListBoardsAsync(TacticsShelfQuery query, Guid userId)
     {
@@ -50,11 +58,13 @@ public class TacticsBoardService(
     {
         var title = Require(request.Title, "A board needs a title", TacticsBoard.TitleMaxLength);
         var document = ValidDocument(request.Document);
+        var tools = ValidTools(request.Tools);
         var shelf = await TacticsAccess.EnsureMayUseAsync(
             TacticsAccess.ShelfOf(request.Scope, request.ClubId, request.TeamId), userId, clubs);
         var folderId = await FolderOnShelfAsync(request.FolderId, shelf, userId);
 
         var board = await boards.GetByIdAsync(boardId);
+        var isNew = board is null;
         if (board is null)
         {
             board = new TacticsBoard
@@ -64,7 +74,8 @@ public class TacticsBoardService(
                 Category = string.Empty,
                 System = string.Empty,
                 Document = document,
-                OwnerUserId = userId
+                OwnerUserId = userId,
+                Origin = TacticsBoardOrigin.Made
             };
             boards.Add(board);
         }
@@ -90,11 +101,49 @@ public class TacticsBoardService(
         board.Document = document;
         board.Version++;
 
+        var toolsChanged = !board.Tools.ToHashSet().SetEquals(tools);
+        board.Tools = tools;
+
+        // Before the save, which is what puts the message in the outbox.
+        await PublishDrawingAsync(board, toolsChanged, isNew, userId);
         await boards.SaveChangesAsync();
 
         var dto = Summary(board);
         dto.Document = board.Document;
         return dto;
+    }
+
+    /// <summary>
+    /// Tells of a board somebody made once it has a drawing on it, and again whenever a save changes
+    /// the tools that drawing uses.
+    ///
+    /// A new board is saved blank, before anything is drawn on it, so the save that makes one counts
+    /// only when it already uses a tool or has a second scene (a copy, an import, a board drawn
+    /// before its first save). Any later save by its maker is the drawing. A starter never tells,
+    /// nor a board from before origins were kept.
+    /// </summary>
+    private async Task PublishDrawingAsync(TacticsBoard board, bool toolsChanged, bool isNew, Guid userId)
+    {
+        if (board.Origin != TacticsBoardOrigin.Made)
+            return;
+
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        if (board.DrawnAt is { } drawnAt)
+        {
+            if (toolsChanged)
+                await publishEndpoint.Publish(DrawnBoardFact.Snapshot(board, drawnAt, now));
+            return;
+        }
+
+        var hasDrawing = !isNew || board.Tools.Count > 0 || board.FrameCount > 1;
+        if (userId != board.OwnerUserId || !hasDrawing)
+            return;
+
+        // To the microsecond, which is all the database keeps: the first copy then says what every
+        // later one, read back from it, will.
+        var firstDrawn = now.AddTicks(-(now.Ticks % TimeSpan.TicksPerMicrosecond));
+        board.DrawnAt = firstDrawn;
+        await publishEndpoint.Publish(DrawnBoardFact.Snapshot(board, firstDrawn, now));
     }
 
     public async Task DeleteBoardAsync(Guid boardId, Guid userId)
@@ -135,6 +184,7 @@ public class TacticsBoardService(
             FrameCount = Math.Max(board.FrameCount, 0),
             Document = ValidDocument(board.Document),
             OwnerUserId = userId,
+            Origin = TacticsBoardOrigin.Starter,
             Version = 1
         }).ToList();
 
@@ -425,6 +475,15 @@ public class TacticsBoardService(
     /// The column is jsonb, so anything that is not JSON fails in the driver as a 500. Parsing it
     /// here turns that into the 400 it actually is.
     /// </summary>
+    private static List<string> ValidTools(IReadOnlyList<string>? tools)
+    {
+        var named = (tools ?? []).Select(tool => tool?.Trim().ToLowerInvariant() ?? string.Empty).Distinct().ToList();
+        if (named.Count > MaxTools || named.Any(tool => tool.Length is 0 or > MaxToolLength))
+            throw new BadRequestException("That is not a list of a board's tools", ErrorCodeEnum.ValidationError);
+
+        return named;
+    }
+
     private static string ValidDocument(string? document)
     {
         if (string.IsNullOrWhiteSpace(document))

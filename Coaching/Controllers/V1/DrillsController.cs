@@ -40,13 +40,17 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
     }
 
     /// <summary>
-    /// Get a drill by ID.
+    /// Get a drill by ID. A drill the reader may not open on its own still opens where they met
+    /// it: in the plan of an event they may read (eventId), or on feedback they may read
+    /// (feedbackId).
     /// </summary>
     [HttpGet("drills/{id:guid}")]
-    [Access<DrillAccess>(DrillAccess.Read, "id")]
-    public async Task<IActionResult> GetById([FromRoute] Guid id)
+    [NoResourceScope("The event or feedback in the query can open the drill besides its own rule, which the route cannot see; DrillService.GetByIdAsync asks both and refuses exactly as for a missing drill")]
+    public async Task<IActionResult> GetById(
+        [FromRoute] Guid id, [FromQuery] Guid? eventId = null, [FromQuery] Guid? feedbackId = null)
     {
-        var drill = await _drillService.GetByIdAsync(id, JwtPayload!.UserId);
+        CheckIsUserLoggedIn();
+        var drill = await _drillService.GetByIdAsync(id, JwtPayload.UserId, new DrillReadContext(eventId, feedbackId));
         return Ok(drill);
     }
 

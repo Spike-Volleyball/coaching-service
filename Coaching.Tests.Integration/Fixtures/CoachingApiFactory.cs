@@ -1,4 +1,5 @@
 using Coaching.Application.Interfaces.Services;
+using Coaching.BackgroundServices;
 using Coaching.Infrastructure.Data.Context;
 using MassTransit;
 using Microsoft.AspNetCore.Hosting;
@@ -51,6 +52,9 @@ public class CoachingApiFactory : WebApplicationFactory<Program>
     /// </summary>
     public IGuardianCacheService GuardianCacheService { get; private set; } = null!;
     public IGuardianAccessSource GuardianAccessSource { get; private set; } = null!;
+
+    /// <summary>Whether the service registered the auto-advance sweep this host then took out.</summary>
+    public bool RegistersTheAutoAdvanceSweep { get; private set; }
 
     public async Task InitializeAsync()
     {
@@ -126,6 +130,15 @@ public class CoachingApiFactory : WebApplicationFactory<Program>
                     services.Remove(d);
                 services.AddSingleton(Substitute.For<IPublishEndpoint>());
             }
+
+            // The auto-advance sweep would move a test's run on under its assertions, from the
+            // moment the host starts. A test that needs a sweep builds the service from this
+            // container and runs one itself.
+            var sweep = services.Where(d =>
+                d.ServiceType == typeof(IHostedService) && d.ImplementationType == typeof(RunAutoAdvanceService)).ToList();
+            RegistersTheAutoAdvanceSweep = sweep.Count == 1;
+            foreach (var d in sweep)
+                services.Remove(d);
 
             var cacheDescriptors = services.Where(d => d.ServiceType == typeof(IDistributedCache)).ToList();
             foreach (var d in cacheDescriptors)

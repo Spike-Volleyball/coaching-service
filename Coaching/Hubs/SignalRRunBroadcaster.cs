@@ -6,6 +6,8 @@ namespace Coaching.Hubs;
 
 public class SignalRRunBroadcaster : IRunBroadcaster
 {
+    private const string RunUpdated = "RunUpdated";
+
     private readonly IHubContext<TrainingRunHub> _hubContext;
 
     public SignalRRunBroadcaster(IHubContext<TrainingRunHub> hubContext)
@@ -14,5 +16,7 @@ public class SignalRRunBroadcaster : IRunBroadcaster
     }
 
     public Task BroadcastRunUpdatedAsync(Guid eventId, RunDto run) =>
-        _hubContext.Clients.Group(TrainingRunHub.GroupName(eventId)).SendAsync("RunUpdated", run);
+        Task.WhenAll(
+            _hubContext.Clients.Group(TrainingRunHub.ControllersGroup(eventId)).SendAsync(RunUpdated, run.WithCanControl(true)),
+            _hubContext.Clients.Group(TrainingRunHub.ViewersGroup(eventId)).SendAsync(RunUpdated, run.WithCanControl(false)));
 }

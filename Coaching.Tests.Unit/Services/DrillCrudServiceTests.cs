@@ -51,7 +51,8 @@ public class DrillCrudServiceTests
             _mapper,
             Substitute.For<ILogger<DrillService>>(),
             Substitute.For<IDrillDialReconciler>(),
-            Substitute.For<IAnalyticsCapture>());
+            Substitute.For<IAnalyticsCapture>(),
+            Substitute.For<IDrillReadGrants>());
     }
 
     [Test]

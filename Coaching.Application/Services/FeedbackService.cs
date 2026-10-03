@@ -194,11 +194,8 @@ public class FeedbackService(
         var feedback = await feedbackRepository.GetByIdWithDetailsAsync(id);
         if (feedback == null) return null;
 
-        if (feedback.CoachUserId != requestingUserId &&
-            (feedback.RecipientUserId != requestingUserId || !feedback.SharedWithPlayer))
-        {
+        if (!feedback.IsReadableBy(requestingUserId))
             return null;
-        }
 
         var dto = mapper.Map<FeedbackDto>(feedback);
         await EnrichAsync(dto);
@@ -325,9 +322,7 @@ public class FeedbackService(
     {
         var feedbacks = await feedbackRepository.GetByEventIdAsync(eventId);
 
-        var accessible = feedbacks.Where(f =>
-            f.CoachUserId == requestingUserId ||
-            (f.RecipientUserId == requestingUserId && f.SharedWithPlayer));
+        var accessible = feedbacks.Where(f => f.IsReadableBy(requestingUserId));
 
         var items = mapper.Map<List<FeedbackDto>>(accessible);
         await EnrichAsync(items);

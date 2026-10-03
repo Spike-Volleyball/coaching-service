@@ -185,6 +185,23 @@ public class PlanRunAnalyticsTests : UnitTestBase
         properties["event_id"].Should().Be(EventId);
         properties["plan_id"].Should().Be(PlanId);
         properties["item_count"].Should().Be(2);
+        properties["is_restart"].Should().Be(false);
+    }
+
+    [Test]
+    public async Task StartAsync_OverAnEarlierRun_CapturesARestart()
+    {
+        // Arrange — Start Over on a finished session.
+        StubInstancePlan();
+        var run = RunOnSecondItem();
+        run.Status = RunStatus.Completed;
+        StubRun(run);
+
+        // Act
+        await _runService.StartAsync(EventId, CoachId);
+
+        // Assert
+        _analytics.CapturedOnce(AnalyticsEventNames.PracticeRunStarted, CoachId)["is_restart"].Should().Be(true);
     }
 
     [Test]
@@ -251,17 +268,98 @@ public class PlanRunAnalyticsTests : UnitTestBase
         var properties = _analytics.CapturedOnce(AnalyticsEventNames.PracticeRunCompleted, CoachId);
         properties["duration_seconds"].Should().Be(2700);
         properties["items_advanced"].Should().Be(2);
+        _analytics.CapturedNone(AnalyticsEventNames.PracticeRunStepChanged);
     }
 
     [Test]
-    public async Task AdvanceAsync_ToTheNextItem_CapturesNothing()
+    public async Task AdvanceAsync_ToTheNextItem_CapturesAStepForwardAndNoCompletion()
+    {
+        // Arrange — 4 minutes into a 5-minute step.
+        StubInstancePlan();
+        StubRun(RunOnFirstItem());
+        AdvanceTime(TimeSpan.FromMinutes(4));
+
+        // Act
+        await _runService.AdvanceAsync(EventId, Item1Id, CoachId);
+
+        // Assert
+        var properties = _analytics.CapturedOnce(AnalyticsEventNames.PracticeRunStepChanged, CoachId);
+        properties["event_id"].Should().Be(EventId);
+        properties["plan_id"].Should().Be(PlanId);
+        properties["direction"].Should().Be(RunStepDirection.Next);
+        properties["from_order"].Should().Be(1);
+        properties["to_order"].Should().Be(2);
+        properties["elapsed_seconds"].Should().Be(240);
+        properties["planned_seconds"].Should().Be(300);
+        _analytics.CapturedNone(AnalyticsEventNames.PracticeRunCompleted);
+    }
+
+    [Test]
+    public async Task AdvanceAsync_AStaleTap_CapturesNothing()
+    {
+        // Arrange
+        StubInstancePlan();
+        StubRun(RunOnSecondItem());
+
+        // Act
+        await _runService.AdvanceAsync(EventId, Item1Id, CoachId);
+
+        // Assert
+        _analytics.CapturedNothing();
+    }
+
+    [Test]
+    public async Task GoToAsync_ThePreviousItem_CapturesAStepBackWithTheTimeOfTheVisitLeft()
+    {
+        // Arrange — Next was tapped too early; 20 seconds later the coach goes back.
+        StubInstancePlan();
+        StubRun(RunOnSecondItem());
+        AdvanceTime(TimeSpan.FromSeconds(20));
+
+        // Act
+        await _runService.GoToAsync(EventId, Item2Id, Item1Id, CoachId);
+
+        // Assert
+        var properties = _analytics.CapturedOnce(AnalyticsEventNames.PracticeRunStepChanged, CoachId);
+        properties["direction"].Should().Be(RunStepDirection.Previous);
+        properties["from_order"].Should().Be(2);
+        properties["to_order"].Should().Be(1);
+        properties["elapsed_seconds"].Should().Be(20);
+        properties["planned_seconds"].Should().Be(600);
+    }
+
+    [TestCase(1, 3)]
+    [TestCase(3, 1)]
+    public async Task GoToAsync_PastTheNeighbouringItem_CapturesAJump(int fromOrder, int toOrder)
+    {
+        // Arrange — three steps, so a move can skip one.
+        StubInstancePlan();
+        var items = TwoRunItems();
+        items.Add(new() { Id = Guid.NewGuid(), PlanItemId = Guid.NewGuid(), Order = 3, PlannedDurationSeconds = 900 });
+        var from = items.Single(i => i.Order == fromOrder);
+        var to = items.Single(i => i.Order == toOrder);
+        from.StartedAtUtc = Now;
+        StubRun(NewRun(items, from.PlanItemId));
+
+        // Act
+        await _runService.GoToAsync(EventId, from.PlanItemId, to.PlanItemId, CoachId);
+
+        // Assert
+        var properties = _analytics.CapturedOnce(AnalyticsEventNames.PracticeRunStepChanged, CoachId);
+        properties["direction"].Should().Be(RunStepDirection.Jump);
+        properties["from_order"].Should().Be(fromOrder);
+        properties["to_order"].Should().Be(toOrder);
+    }
+
+    [Test]
+    public async Task GoToAsync_AStaleTap_CapturesNothing()
     {
         // Arrange
         StubInstancePlan();
         StubRun(RunOnFirstItem());
 
         // Act
-        await _runService.AdvanceAsync(EventId, Item1Id, CoachId);
+        await _runService.GoToAsync(EventId, Item2Id, Item1Id, CoachId);
 
         // Assert
         _analytics.CapturedNothing();

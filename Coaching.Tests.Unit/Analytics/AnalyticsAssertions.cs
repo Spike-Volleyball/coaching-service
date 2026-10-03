@@ -25,8 +25,20 @@ public static class AnalyticsAssertions
         return (IReadOnlyDictionary<string, object?>)matching[0][2]!;
     }
 
+    /// <summary>Every capture of <paramref name="eventName"/>, in the order they were made.</summary>
+    public static List<(Guid UserId, IReadOnlyDictionary<string, object?> Properties)> CapturedEach(
+        this IAnalyticsCapture analytics, string eventName) =>
+        CaptureCalls(analytics)
+            .Where(arguments => (string)arguments[1]! == eventName)
+            .Select(arguments => ((Guid)arguments[0]!, (IReadOnlyDictionary<string, object?>)arguments[2]!))
+            .ToList();
+
     public static void CapturedNothing(this IAnalyticsCapture analytics) =>
         CaptureCalls(analytics).Should().BeEmpty("a failed operation is not a fact worth recording");
+
+    public static void CapturedNone(this IAnalyticsCapture analytics, string eventName) =>
+        CaptureCalls(analytics).Should().NotContain(
+            arguments => (string)arguments[1]! == eventName, "{0} is not what happened", eventName);
 
     private static List<object?[]> CaptureCalls(IAnalyticsCapture analytics) =>
         analytics.ReceivedCalls()
