@@ -1,3 +1,4 @@
+using Coaching.Application.DTOs.Comments;
 using Coaching.Application.DTOs.Templates;
 
 namespace Coaching.Application.Interfaces.Services;
@@ -43,7 +44,6 @@ public interface ITrainingPlanService
     Task<PlanBookmarkStatusDto> UnbookmarkAsync(Guid planId, Guid userId);
 
     // Comments
-    Task<PlanCommentDto> CreateCommentAsync(Guid planId, CreatePlanCommentDto request, Guid userId);
     Task<PlanCommentsResponseDto> GetCommentsAsync(Guid planId, Guid? cursor, int limit, Guid userId);
-    Task DeleteCommentAsync(Guid planId, Guid commentId, Guid userId);
+    Task<CommentStanding> GetCommentStandingAsync(Guid planId, Guid userId);
 }

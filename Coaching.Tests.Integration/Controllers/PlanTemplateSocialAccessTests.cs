@@ -77,7 +77,6 @@ public class PlanTemplateSocialAccessTests
             await _client.GetAsync($"/v1/plans/{planId}/like"),
             await _client.PostAsync($"/v1/plans/{planId}/bookmark", null),
             await _client.DeleteAsync($"/v1/plans/{planId}/bookmark"),
-            await _client.PostAsJsonAsync($"/v1/plans/{planId}/comments", new CreatePlanCommentDto("Nice plan")),
             await _client.GetAsync($"/v1/plans/{planId}/comments"),
         };
 
@@ -100,12 +99,12 @@ public class PlanTemplateSocialAccessTests
         // Act
         var liked = await _client.PostAsync($"/v1/plans/{planId}/like", null);
         var bookmarked = await _client.PostAsync($"/v1/plans/{planId}/bookmark", null);
-        var commented = await _client.PostAsJsonAsync($"/v1/plans/{planId}/comments", new CreatePlanCommentDto("Swap the drills"));
+        var listed = await _client.GetAsync($"/v1/plans/{planId}/comments");
 
         // Assert
         liked.StatusCode.Should().Be(HttpStatusCode.OK);
         bookmarked.StatusCode.Should().Be(HttpStatusCode.OK);
-        commented.StatusCode.Should().Be(HttpStatusCode.Created);
+        listed.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     [Test]
@@ -118,13 +117,13 @@ public class PlanTemplateSocialAccessTests
         // Act
         var liked = await _client.PostAsync($"/v1/plans/{planId}/like", null);
         var bookmarked = await _client.PostAsync($"/v1/plans/{planId}/bookmark", null);
-        var commented = await _client.PostAsJsonAsync($"/v1/plans/{planId}/comments", new CreatePlanCommentDto("Using this on Thursday"));
+        var listed = await _client.GetAsync($"/v1/plans/{planId}/comments");
 
         // Assert
         liked.StatusCode.Should().Be(HttpStatusCode.OK);
+        listed.StatusCode.Should().Be(HttpStatusCode.OK);
         (await liked.Content.ReadFromJsonAsync<PlanLikeStatusDto>(JsonOptions))!.LikeCount.Should().Be(1);
         bookmarked.StatusCode.Should().Be(HttpStatusCode.OK);
-        commented.StatusCode.Should().Be(HttpStatusCode.Created);
     }
 
     [Test]

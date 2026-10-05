@@ -752,42 +752,49 @@ public class DrillsControllerTests
     }
 
     [Test]
-    public async Task Comments_CreateReadAndDelete_RoundTrip()
+    public async Task GetComments_ListsTheCommentsThatWereWrittenBeforeTheyMoved()
     {
         // Arrange
         var source = NewDrill("Discussable drill", CreatorId, DrillVisibility.Public);
-        await SeedAsync([CreatorProfile(), source]);
+        var kept = new DrillComment { DrillId = source.Id, UserId = CreatorId, Content = "Keep the platform quiet" };
+        var removed = new DrillComment { DrillId = source.Id, UserId = CreatorId, Content = "Gone", IsDeleted = true };
+        await SeedAsync([CreatorProfile(), source, kept, removed]);
         SetAuth(CreatorId);
 
-        // Act - create
-        var createResponse = await _client.PostAsJsonAsync(
-            $"/v1/drills/{source.Id}/comments",
-            new CreateDrillCommentDto("Keep the platform quiet"),
-            JsonOptions);
+        // Act
+        var response = await _client.GetAsync($"/v1/drills/{source.Id}/comments");
 
-        // Assert - create and read
-        createResponse.StatusCode.Should().Be(HttpStatusCode.Created);
-        var created = await createResponse.Content.ReadFromJsonAsync<DrillCommentDto>(JsonOptions);
-        created!.Content.Should().Be("Keep the platform quiet");
-        created.UserId.Should().Be(CreatorId);
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var comments = await response.Content.ReadFromJsonAsync<DrillCommentsResponseDto>(JsonOptions);
+        comments!.Items.Should().ContainSingle().Which.Id.Should().Be(kept.Id);
+    }
 
-        var listResponse = await _client.GetAsync($"/v1/drills/{source.Id}/comments");
-        var comments = await listResponse.Content.ReadFromJsonAsync<DrillCommentsResponseDto>(JsonOptions);
-        comments!.Items.Should().ContainSingle().Which.Id.Should().Be(created.Id);
+    [Test]
+    public async Task WritingComments_IsGone_BecauseSocialKeepsThemNow()
+    {
+        // Arrange
+        var source = NewDrill("Discussable drill", CreatorId, DrillVisibility.Public);
+        var comment = new DrillComment { DrillId = source.Id, UserId = CreatorId, Content = "Keep the platform quiet" };
+        await SeedAsync([CreatorProfile(), source, comment]);
+        SetAuth(CreatorId);
 
-        // Act - delete
-        var deleteResponse = await _client.DeleteAsync($"/v1/drills/{source.Id}/comments/{created.Id}");
+        // Act
+        var created = await _client.PostAsJsonAsync($"/v1/drills/{source.Id}/comments", new { content = "Hello" }, JsonOptions);
+        var deleted = await _client.DeleteAsync($"/v1/drills/{source.Id}/comments/{comment.Id}");
 
-        // Assert - soft-deleted comments no longer appear
-        deleteResponse.StatusCode.Should().Be(HttpStatusCode.NoContent);
-        var afterDeleteResponse = await _client.GetAsync($"/v1/drills/{source.Id}/comments");
-        var afterDelete = await afterDeleteResponse.Content.ReadFromJsonAsync<DrillCommentsResponseDto>(JsonOptions);
-        afterDelete!.Items.Should().BeEmpty();
+        // Assert
+        foreach (var response in new[] { created, deleted })
+        {
+            response.StatusCode.Should().Be(HttpStatusCode.Gone);
+            var body = JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
+            body["code"]!.GetValue<string>().Should().Be("COMMENTS_MOVED");
+            body["status"]!.GetValue<int>().Should().Be(410);
+        }
 
         await using var scope = _factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<CoachingDbContext>();
-        var stored = await db.DrillComments.IgnoreQueryFilters().SingleAsync(c => c.Id == created.Id);
-        stored.IsDeleted.Should().BeTrue();
+        (await db.DrillComments.SingleAsync()).IsDeleted.Should().BeFalse();
     }
 
     [Test]
