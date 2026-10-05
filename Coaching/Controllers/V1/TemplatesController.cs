@@ -1,4 +1,5 @@
 using Asp.Versioning;
+using Coaching.Application.Exceptions;
 using Coaching.Application.DTOs.Templates;
 using Coaching.Application.Interfaces.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -271,11 +272,10 @@ public class PlansController : Shared.Microservices.Controllers.BaseApiControlle
     #region Comments
 
     [HttpPost("plans/{id:guid}/comments")]
-    public async Task<IActionResult> CreateComment([FromRoute] Guid id, [FromBody] CreatePlanCommentDto request)
+    public IActionResult CreateComment([FromRoute] Guid id)
     {
         CheckIsUserLoggedIn();
-        var comment = await _planService.CreateCommentAsync(id, request, JwtPayload.UserId);
-        return Created($"/v1/plans/{id}/comments/{comment.Id}", comment);
+        throw new CommentsMovedException();
     }
 
     [HttpGet("plans/{id:guid}/comments")]
@@ -287,11 +287,10 @@ public class PlansController : Shared.Microservices.Controllers.BaseApiControlle
     }
 
     [HttpDelete("plans/{id:guid}/comments/{commentId:guid}")]
-    public async Task<IActionResult> DeleteComment([FromRoute] Guid id, [FromRoute] Guid commentId)
+    public IActionResult DeleteComment([FromRoute] Guid id, [FromRoute] Guid commentId)
     {
         CheckIsUserLoggedIn();
-        await _planService.DeleteCommentAsync(id, commentId, JwtPayload.UserId);
-        return NoContent();
+        throw new CommentsMovedException();
     }
 
     #endregion

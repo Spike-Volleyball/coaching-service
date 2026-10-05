@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AutoMapper;
 using Coaching.Application.Analytics;
+using Coaching.Application.DTOs.Comments;
 using Coaching.Application.DTOs.Drills;
 using Coaching.Application.Interfaces.Repositories;
 using Coaching.Application.Interfaces.Services;
@@ -146,6 +147,12 @@ public class DrillService : IDrillService
 
     public async Task<bool> CanReadAsync(Guid id, Guid userId) =>
         await _drillRepository.GetByIdAsync(id) is { } drill && await IsReadableAsync(drill, userId);
+
+    // Only a comment's author removes it from a drill's thread, so nobody moderates.
+    public async Task<CommentStanding> GetCommentStandingAsync(Guid id, Guid userId) =>
+        await _drillRepository.GetByIdAsync(id) is { } drill
+            ? new CommentStanding(Exists: true, CanRead: await IsReadableAsync(drill, userId), CanModerate: false)
+            : CommentStanding.Missing;
 
     private async Task<bool> IsReadableAsync(Drill drill, Guid userId) =>
         drill.Visibility == DrillVisibility.Public
@@ -725,37 +732,6 @@ public class DrillService : IDrillService
     // COMMENTS
     // =========================================================================
 
-    public async Task<DrillCommentDto> CreateCommentAsync(Guid drillId, CreateDrillCommentDto request, Guid userId)
-    {
-        var drill = await _drillRepository.GetByIdAsync(drillId);
-        if (drill == null)
-            throw new EntityNotFoundException("Drill not found");
-
-        if (string.IsNullOrWhiteSpace(request.Content))
-            throw new BadRequestException("Comment content is required", ErrorCodeEnum.ValidationError);
-
-        if (request.ParentCommentId.HasValue)
-        {
-            var parentComment = await _commentRepository.GetByIdAsync(request.ParentCommentId.Value);
-            if (parentComment == null || parentComment.DrillId != drillId)
-                throw new BadRequestException("Parent comment not found", ErrorCodeEnum.EntityNotFound);
-        }
-
-        var comment = new DrillComment
-        {
-            DrillId = drillId,
-            UserId = userId,
-            Content = request.Content,
-            ParentCommentId = request.ParentCommentId
-        };
-
-        _commentRepository.Add(comment);
-        await _commentRepository.SaveChangesAsync();
-
-        var createdComment = await _commentRepository.GetByIdWithDetailsAsync(comment.Id);
-        return _mapper.Map<DrillCommentDto>(createdComment);
-    }
-
     public async Task<DrillCommentsResponseDto> GetCommentsAsync(Guid drillId, Guid? cursor, int limit)
     {
         var drill = await _drillRepository.GetByIdAsync(drillId);
@@ -778,20 +754,6 @@ public class DrillService : IDrillService
             NextCursor = nextCursor,
             HasMore = hasMore
         };
-    }
-
-    public async Task DeleteCommentAsync(Guid drillId, Guid commentId, Guid userId)
-    {
-        var comment = await _commentRepository.GetByIdAsync(commentId);
-        if (comment == null || comment.DrillId != drillId)
-            throw new EntityNotFoundException("Comment not found");
-
-        if (comment.UserId != userId)
-            throw new ForbiddenException("Only the comment author can delete this comment");
-
-        comment.IsDeleted = true;
-        _commentRepository.Update(comment);
-        await _commentRepository.SaveChangesAsync();
     }
 
     // =========================================================================

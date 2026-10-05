@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Shared.DataAccess.Providers.Interfaces;
 using Asp.Versioning;
+using Coaching.Application.Exceptions;
 using Coaching.Application.Interfaces.Services;
 using Coaching.Application.DTOs.Drills;
 using Coaching.Authorization;
@@ -250,11 +251,10 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
 
     [HttpPost("drills/{id:guid}/comments")]
     [Access<DrillAccess>(DrillAccess.Read, "id")]
-    public async Task<IActionResult> CreateComment([FromRoute] Guid id, [FromBody] CreateDrillCommentDto request)
+    public IActionResult CreateComment([FromRoute] Guid id)
     {
         CheckIsUserLoggedIn();
-        var comment = await _drillService.CreateCommentAsync(id, request, JwtPayload.UserId);
-        return Created($"/v1/drills/{id}/comments/{comment.Id}", comment);
+        throw new CommentsMovedException();
     }
 
     [HttpGet("drills/{id:guid}/comments")]
@@ -270,11 +270,10 @@ public class DrillsController : Shared.Microservices.Controllers.BaseApiControll
 
     [HttpDelete("drills/{id:guid}/comments/{commentId:guid}")]
     [Access<DrillAccess>(DrillAccess.Read, "id")]
-    public async Task<IActionResult> DeleteComment([FromRoute] Guid id, [FromRoute] Guid commentId)
+    public IActionResult DeleteComment([FromRoute] Guid id, [FromRoute] Guid commentId)
     {
         CheckIsUserLoggedIn();
-        await _drillService.DeleteCommentAsync(id, commentId, JwtPayload.UserId);
-        return NoContent();
+        throw new CommentsMovedException();
     }
 
     // =========================================================================
