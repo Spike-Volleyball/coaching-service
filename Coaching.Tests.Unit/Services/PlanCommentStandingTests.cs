@@ -28,6 +28,7 @@ public class PlanCommentStandingTests : UnitTestBase
 {
     private ITrainingPlanRepository _planRepository = null!;
     private IEventsGrpcClient _eventsGrpcClient = null!;
+    private IClubsGrpcClient _clubsClient = null!;
     private TrainingPlanService _sut = null!;
 
     private static readonly Guid EventId = Guid.NewGuid();
@@ -35,6 +36,8 @@ public class PlanCommentStandingTests : UnitTestBase
     private static readonly Guid ParticipantId = Guid.NewGuid();
     private static readonly Guid EventAdminId = Guid.NewGuid();
     private static readonly Guid StrangerId = Guid.NewGuid();
+    private static readonly Guid ClubId = Guid.NewGuid();
+    private static readonly Guid ClubMateId = Guid.NewGuid();
 
     [SetUp]
     public override void SetUp()
@@ -43,6 +46,8 @@ public class PlanCommentStandingTests : UnitTestBase
 
         _planRepository = Substitute.For<ITrainingPlanRepository>();
         _eventsGrpcClient = Substitute.For<IEventsGrpcClient>();
+        _clubsClient = Substitute.For<IClubsGrpcClient>();
+        _clubsClient.IsUserClubMemberAsync(ClubMateId, ClubId).Returns(true);
 
         _eventsGrpcClient.IsEventParticipantAsync(EventId, ParticipantId).Returns((true, true));
         _eventsGrpcClient.IsEventParticipantAsync(EventId, CreatorId).Returns((false, true));
@@ -65,7 +70,7 @@ public class PlanCommentStandingTests : UnitTestBase
             dialValues,
             Substitute.For<IRepository<PlanStation>>(),
             Substitute.For<IRepository<PlanStationItem>>(),
-            Substitute.For<IClubsGrpcClient>(),
+            _clubsClient,
             _eventsGrpcClient,
             Substitute.For<IPlanCoachService>(),
             Substitute.For<IPublishEndpoint>(),
@@ -192,6 +197,34 @@ public class PlanCommentStandingTests : UnitTestBase
     {
         // Arrange
         var plan = StubPlan(PlanType.Template);
+
+        // Act
+        var standing = await _sut.GetCommentStandingAsync(plan.Id, StrangerId);
+
+        // Assert
+        standing.Should().Be(new CommentStanding(true, false, false));
+    }
+
+    [Test]
+    public async Task GetCommentStandingAsync_OnAPrivateClubTemplate_ForAClubMate_ReadsButDoesNotModerate()
+    {
+        // Arrange — SPI-6900: private on a club's template keeps it inside the club
+        var plan = StubPlan(PlanType.Template);
+        plan.ClubId = ClubId;
+
+        // Act
+        var standing = await _sut.GetCommentStandingAsync(plan.Id, ClubMateId);
+
+        // Assert
+        standing.Should().Be(new CommentStanding(true, true, false));
+    }
+
+    [Test]
+    public async Task GetCommentStandingAsync_OnAPrivateClubTemplate_ForSomeoneOutsideTheClub_CannotRead()
+    {
+        // Arrange
+        var plan = StubPlan(PlanType.Template);
+        plan.ClubId = ClubId;
 
         // Act
         var standing = await _sut.GetCommentStandingAsync(plan.Id, StrangerId);

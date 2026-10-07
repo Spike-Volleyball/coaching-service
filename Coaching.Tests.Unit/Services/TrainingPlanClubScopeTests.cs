@@ -95,6 +95,28 @@ public class TrainingPlanClubScopeTests
     }
 
     [Test]
+    public async Task GetClubPlansAsync_Member_ReturnsTheClubsPrivateTemplates()
+    {
+        // Arrange — SPI-6900: private on a club's template keeps it inside the club, not from it.
+        var privatePlan = BuildPublicClubPlan(ClubId);
+        privatePlan.Visibility = TemplateVisibility.Private;
+        var anotherClubsPlan = BuildPublicClubPlan(Guid.NewGuid());
+        anotherClubsPlan.Visibility = TemplateVisibility.Private;
+        var eventPlan = BuildPublicClubPlan(ClubId);
+        eventPlan.Visibility = TemplateVisibility.Private;
+        eventPlan.PlanType = PlanType.Instance;
+        StubPlans(privatePlan, anotherClubsPlan, eventPlan);
+        _clubsClient.IsUserClubMemberAsync(UserId, ClubId).Returns(true);
+
+        // Act
+        var result = await _sut.GetClubPlansAsync(ClubId, UserId, new PlanFilterRequest());
+
+        // Assert
+        result.Items.Should().ContainSingle(p => p.Id == privatePlan.Id);
+        result.TotalCount.Should().Be(1);
+    }
+
+    [Test]
     public async Task GetClubPlansAsync_NonMember_ReturnsEmptyWithoutQueryingPlans()
     {
         // Arrange — a foreign club's plans must not leak to a non-member who merely supplies
