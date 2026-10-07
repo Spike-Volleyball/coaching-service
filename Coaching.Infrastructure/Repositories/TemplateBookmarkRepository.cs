@@ -15,9 +15,9 @@ public class PlanBookmarkRepository : BaseRepository<PlanBookmark>, IPlanBookmar
         return await _dbSet.FirstOrDefaultAsync(b => b.TemplateId == templateId && b.UserId == userId && !b.IsDeleted);
     }
 
-    public async Task<IEnumerable<PlanBookmark>> GetByUserAsync(Guid userId, int skip, int take)
+    public async Task<IEnumerable<PlanBookmark>> GetByUserAsync(Guid userId, IReadOnlyCollection<Guid> memberClubIds, int skip, int take)
     {
-        return await StillReadable(userId)
+        return await StillReadable(userId, memberClubIds)
             .Include(b => b.Plan)
                 .ThenInclude(t => t.Items)
             .Include(b => b.Plan)
@@ -28,9 +28,9 @@ public class PlanBookmarkRepository : BaseRepository<PlanBookmark>, IPlanBookmar
             .ToListAsync();
     }
 
-    public async Task<int> GetCountByUserAsync(Guid userId)
+    public async Task<int> GetCountByUserAsync(Guid userId, IReadOnlyCollection<Guid> memberClubIds)
     {
-        return await StillReadable(userId).CountAsync();
+        return await StillReadable(userId, memberClubIds).CountAsync();
     }
 
     public async Task<IEnumerable<Guid>> GetUserBookmarkedPlanIdsAsync(Guid userId, IEnumerable<Guid> planIds)
@@ -43,9 +43,9 @@ public class PlanBookmarkRepository : BaseRepository<PlanBookmark>, IPlanBookmar
     }
 
     /// <summary>The person's own, on templates they may still read: one taken private leaves the list.</summary>
-    private IQueryable<PlanBookmark> StillReadable(Guid userId)
+    private IQueryable<PlanBookmark> StillReadable(Guid userId, IReadOnlyCollection<Guid> memberClubIds)
     {
-        var readable = _context.Set<TrainingPlan>().Where(TrainingPlan.TemplateReadableBy(userId)).Select(p => p.Id);
+        var readable = _context.Set<TrainingPlan>().Where(TrainingPlan.TemplateReadableBy(userId, memberClubIds)).Select(p => p.Id);
         return _dbSet.Where(b => b.UserId == userId && !b.IsDeleted && readable.Contains(b.TemplateId));
     }
 }

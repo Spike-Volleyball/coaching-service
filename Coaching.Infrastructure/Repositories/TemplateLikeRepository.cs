@@ -29,9 +29,9 @@ public class PlanLikeRepository : BaseRepository<PlanLike>, IPlanLikeRepository
             .ToListAsync();
     }
 
-    public async Task<IEnumerable<PlanLike>> GetByUserAsync(Guid userId, int skip, int take)
+    public async Task<IEnumerable<PlanLike>> GetByUserAsync(Guid userId, IReadOnlyCollection<Guid> memberClubIds, int skip, int take)
     {
-        return await StillReadable(userId)
+        return await StillReadable(userId, memberClubIds)
             .Include(l => l.Plan)
                 .ThenInclude(p => p.Items)
             .Include(l => l.Plan)
@@ -42,15 +42,15 @@ public class PlanLikeRepository : BaseRepository<PlanLike>, IPlanLikeRepository
             .ToListAsync();
     }
 
-    public async Task<int> GetCountByUserAsync(Guid userId)
+    public async Task<int> GetCountByUserAsync(Guid userId, IReadOnlyCollection<Guid> memberClubIds)
     {
-        return await StillReadable(userId).CountAsync();
+        return await StillReadable(userId, memberClubIds).CountAsync();
     }
 
     /// <summary>The person's own, on templates they may still read: one taken private leaves the list.</summary>
-    private IQueryable<PlanLike> StillReadable(Guid userId)
+    private IQueryable<PlanLike> StillReadable(Guid userId, IReadOnlyCollection<Guid> memberClubIds)
     {
-        var readable = _context.Set<TrainingPlan>().Where(TrainingPlan.TemplateReadableBy(userId)).Select(p => p.Id);
+        var readable = _context.Set<TrainingPlan>().Where(TrainingPlan.TemplateReadableBy(userId, memberClubIds)).Select(p => p.Id);
         return _dbSet.Where(l => l.UserId == userId && !l.IsDeleted && readable.Contains(l.TemplateId));
     }
 }

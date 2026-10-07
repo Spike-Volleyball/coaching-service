@@ -54,12 +54,16 @@ public class TrainingPlan : BaseEntity
     public virtual ICollection<PlanItemPlacement> Placements { get; set; } = new List<PlanItemPlacement>();
 
     /// <summary>
-    /// Who may read a template: anyone when it is public, its author when it is private. Its likes,
+    /// Who may read a template: anyone when it is public; when it is private, its author and the
+    /// members of its club, who read the club's private drills the same way (SPI-6900). Its likes,
     /// bookmarks and comments follow the same rule, and so do the lists built from them, so a
     /// template taken private leaves everyone else's (SPI-6801).
     /// </summary>
-    public static Expression<Func<TrainingPlan, bool>> TemplateReadableBy(Guid userId) =>
+    /// <param name="memberClubIds">The reader's clubs, which only clubs-service knows.</param>
+    public static Expression<Func<TrainingPlan, bool>> TemplateReadableBy(Guid userId, IReadOnlyCollection<Guid> memberClubIds) =>
         plan => !plan.IsDeleted
             && plan.PlanType == PlanType.Template
-            && (plan.Visibility == TemplateVisibility.Public || plan.CreatedByUserId == userId);
+            && (plan.Visibility == TemplateVisibility.Public
+                || plan.CreatedByUserId == userId
+                || (plan.ClubId != null && memberClubIds.Contains(plan.ClubId.Value)));
 }

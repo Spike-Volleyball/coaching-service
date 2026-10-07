@@ -533,7 +533,8 @@ public class TrainingPlanService : ITrainingPlanService
         }
 
         var query = _planRepository.Query()
-            .Where(t => t.ClubId == clubId && t.PlanType == PlanType.Template && t.Visibility != TemplateVisibility.Private);
+            .Where(t => t.ClubId == clubId)
+            .Where(TrainingPlan.TemplateReadableBy(userId, [clubId]));
 
         var (items, totalCount) = await ApplyFiltersAndPaginationAsync(query, filter);
 
@@ -575,8 +576,10 @@ public class TrainingPlanService : ITrainingPlanService
     public async Task<PlanListResponseDto> GetBookmarkedPlansAsync(Guid userId, PlanFilterRequest filter)
     {
         var skip = (filter.Page - 1) * filter.PageSize;
-        var bookmarks = await _bookmarkRepository.GetByUserAsync(userId, skip, filter.PageSize);
-        var totalCount = await _bookmarkRepository.GetCountByUserAsync(userId);
+        var memberClubIds = await MemberClubsAmongAsync(
+            _planRepository.Query().Where(p => p.Bookmarks.Any(b => b.UserId == userId && !b.IsDeleted)), userId);
+        var bookmarks = await _bookmarkRepository.GetByUserAsync(userId, memberClubIds, skip, filter.PageSize);
+        var totalCount = await _bookmarkRepository.GetCountByUserAsync(userId, memberClubIds);
 
         var plans = bookmarks.Select(b => b.Plan).ToList();
 
@@ -597,8 +600,10 @@ public class TrainingPlanService : ITrainingPlanService
     public async Task<PlanListResponseDto> GetLikedPlansAsync(Guid userId, PlanFilterRequest filter)
     {
         var skip = (filter.Page - 1) * filter.PageSize;
-        var likes = await _likeRepository.GetByUserAsync(userId, skip, filter.PageSize);
-        var totalCount = await _likeRepository.GetCountByUserAsync(userId);
+        var memberClubIds = await MemberClubsAmongAsync(
+            _planRepository.Query().Where(p => p.Likes.Any(l => l.UserId == userId && !l.IsDeleted)), userId);
+        var likes = await _likeRepository.GetByUserAsync(userId, memberClubIds, skip, filter.PageSize);
+        var totalCount = await _likeRepository.GetCountByUserAsync(userId, memberClubIds);
 
         var plans = likes.Select(l => l.Plan).ToList();
 
@@ -1117,11 +1122,26 @@ public class TrainingPlanService : ITrainingPlanService
     /// </summary>
     private async Task EnsureTemplateReadableAsync(Guid planId, Guid userId)
     {
-        var readable = await _planRepository.Query()
-            .Where(p => p.Id == planId)
-            .AnyAsync(TrainingPlan.TemplateReadableBy(userId));
-        if (!readable)
+        var plan = _planRepository.Query().Where(p => p.Id == planId);
+        var memberClubIds = await MemberClubsAmongAsync(plan, userId);
+        if (!await plan.AnyAsync(TrainingPlan.TemplateReadableBy(userId, memberClubIds)))
             throw new EntityNotFoundException("Plan not found");
+    }
+
+    /// <summary>
+    /// The clubs behind these plans that the reader belongs to. Membership decides only a private
+    /// plan somebody else wrote, so those plans' clubs are the only ones clubs-service is asked about.
+    /// </summary>
+    private async Task<IReadOnlyCollection<Guid>> MemberClubsAmongAsync(IQueryable<TrainingPlan> plans, Guid userId)
+    {
+        var clubIds = await plans
+            .Where(p => p.ClubId != null && p.Visibility == TemplateVisibility.Private && p.CreatedByUserId != userId)
+            .Select(p => p.ClubId!.Value)
+            .Distinct()
+            .ToListAsync();
+
+        var memberships = await Task.WhenAll(clubIds.Select(clubId => _clubsClient.IsUserClubMemberAsync(userId, clubId)));
+        return clubIds.Where((_, i) => memberships[i]).ToList();
     }
 
     /// <summary>
@@ -1766,12 +1786,12 @@ public class TrainingPlanService : ITrainingPlanService
         if (plan.CreatedByUserId == userId.Value)
             return;
 
-        // Club plans: Check if user is club member when club service is available
-        if (plan.ClubId.HasValue)
-        {
-            // TODO: Check club membership when club service is available
-            // For now, allow club members (would need club service integration)
-        }
+        // A private template stays inside its club (SPI-6900). An event's plan is read through its
+        // event instead, whatever club it names.
+        if (plan.PlanType == PlanType.Template
+            && plan.ClubId is { } clubId
+            && await _clubsClient.IsUserClubMemberAsync(userId.Value, clubId))
+            return;
 
         // Otherwise, deny access
         throw new ForbiddenException("You do not have permission to view this plan");
