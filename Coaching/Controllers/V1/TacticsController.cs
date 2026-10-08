@@ -2,7 +2,10 @@ using Asp.Versioning;
 using Coaching.Application.DTOs.Tactics;
 using Coaching.Application.Interfaces.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Shared.DataAccess.Providers.Interfaces;
+using Shared.Security.Authorization;
+using Shared.Security.PublicReads;
 
 namespace Coaching.Controllers.V1;
 
@@ -91,6 +94,31 @@ public class TacticsController : Shared.Microservices.Controllers.BaseApiControl
         CheckIsUserLoggedIn();
         return Ok(await _tactics.MoveFolderAsync(id, request, JwtPayload!.UserId));
     }
+
+    /// <summary>
+    /// Opens a board to anyone with the link. Sharing again returns the same link and replaces the
+    /// copy it shows.
+    /// </summary>
+    [HttpPost("tactics-boards/{id:guid}/share")]
+    public async Task<IActionResult> ShareBoard([FromRoute] Guid id, [FromBody] ShareTacticsBoardRequest request)
+    {
+        CheckIsUserLoggedIn();
+        return Ok(await _tactics.ShareBoardAsync(id, request, JwtPayload!.UserId));
+    }
+
+    [HttpDelete("tactics-boards/{id:guid}/share")]
+    public async Task<IActionResult> StopSharingBoard([FromRoute] Guid id)
+    {
+        CheckIsUserLoggedIn();
+        await _tactics.StopSharingBoardAsync(id, JwtPayload!.UserId);
+        return NoContent();
+    }
+
+    [HttpGet("tactics-boards/shared/{token}")]
+    [PublicEndpoint("A shared tactics board is read by its link; the token is the credential")]
+    [EnableRateLimiting(PublicReadLimit.PolicyName)]
+    public async Task<IActionResult> GetSharedBoard([FromRoute] string token) =>
+        Ok(await _tactics.GetSharedBoardAsync(token));
 
     [HttpDelete("tactics-folders/{id:guid}")]
     public async Task<IActionResult> DeleteFolder([FromRoute] Guid id)

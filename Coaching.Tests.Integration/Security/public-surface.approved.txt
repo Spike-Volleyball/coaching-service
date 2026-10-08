@@ -1,1 +1,2 @@
 ANY /health - Liveness probe for Docker and the gateway; reports no data
+GET /v{version:apiVersion}/tactics-boards/shared/{token} - A shared tactics board is read by its link; the token is the credential

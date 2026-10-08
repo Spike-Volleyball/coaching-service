@@ -25,6 +25,9 @@ public class TacticsBoardDto
     public int Version { get; set; }
     public DateTime UpdatedAt { get; set; }
 
+    /// <summary>Null while the board is not shared by link.</summary>
+    public string? ShareToken { get; set; }
+
     /// <summary>Left out of listings — a shelf of boards would be megabytes of scenes nobody asked for.</summary>
     public string? Document { get; set; }
 }
@@ -59,6 +62,12 @@ public record SaveTacticsBoardRequest
     public bool IsFavorite { get; init; }
     public int FrameCount { get; init; }
     public string Document { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The copy a link to the board shows. Read only when the board is shared: absent from a client
+    /// too old to send it, which leaves the copy already stored, and ignored on a board nobody shared.
+    /// </summary>
+    public string? SharedDocument { get; init; }
 
     /// <summary>
     /// What the drawing uses, as the editor names its tools: the kinds of mark on it and the
@@ -125,4 +134,26 @@ public record MoveTacticsFolderRequest
 {
     public Guid? ParentFolderId { get; init; }
     public int Position { get; init; }
+}
+
+/// <summary>The copy a link will show, prepared by the client with people's names and photos taken out.</summary>
+public record ShareTacticsBoardRequest
+{
+    public string Document { get; init; } = string.Empty;
+}
+
+public class TacticsBoardShareDto
+{
+    public string Token { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// What a link opens. Deliberately without owner, shelf, folder or version: the reader is anybody
+/// holding the token.
+/// </summary>
+public class SharedTacticsBoardDto
+{
+    public string Title { get; set; } = string.Empty;
+    public string Document { get; set; } = string.Empty;
+    public DateTime UpdatedAt { get; set; }
 }

@@ -28,6 +28,7 @@ using Shared.Security.Authentication;
 using Shared.Security.Authorization;
 using Shared.Security.Endpoints;
 using Shared.Security.Output;
+using Shared.Security.PublicReads;
 using OpenTelemetry.Trace;
 
 namespace Coaching
@@ -196,6 +197,8 @@ namespace Coaching
             // Deny by default: anything that declares nothing needs a signed-in user (SPI-6446).
             services.AddSpikeAuthentication(Configuration);
             services.AddSpikeAuthorization();
+
+            services.AddPublicReadLimit(Configuration);
             services.AddScoped<IResourceAuthority<DrillAccess>, DrillAuthority>();
             services.AddScoped<IResourceAuthority<EvaluationSessionAccess>, EvaluationSessionAuthority>();
             services.AddScoped<IResourceAuthority<RunAccess>, RunAuthority>();
@@ -257,6 +260,8 @@ namespace Coaching
             app.UseRouting();
 
             app.UseAuthentication();
+            // After authentication: the public-read limit does not count a signed-in caller.
+            app.UseRateLimiter();
             app.UseAuthorization();
 
             app.UseMiddleware<ErrorHandlerMiddleware>();
