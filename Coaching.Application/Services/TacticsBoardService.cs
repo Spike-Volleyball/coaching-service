@@ -1,5 +1,5 @@
-using System.Linq.Expressions;
 using System.Buffers.Text;
+using System.Linq.Expressions;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Coaching.Application.DTOs.Tactics;
@@ -30,9 +30,10 @@ public class TacticsBoardService(
 
     /// <summary>The most tools a board may name, and the longest a name may be: the editor has a handful, each a word.</summary>
     public const int MaxTools = 16;
-
-    private const int ShareTokenBytes = 32;
     public const int MaxToolLength = 32;
+
+    /// <summary>How much randomness a link's token carries: the token is all that stands between a stranger and the board.</summary>
+    private const int ShareTokenBytes = 32;
 
     public async Task<IReadOnlyList<TacticsBoardDto>> ListBoardsAsync(TacticsShelfQuery query, Guid userId)
     {
