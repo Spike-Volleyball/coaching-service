@@ -1,3 +1,4 @@
+using Coaching.Application.DTOs.Comments;
 using Coaching.Application.DTOs.Drills;
 using Shared.DTOs;
 
@@ -17,6 +18,7 @@ public interface IDrillService
     /// A public drill is anyone's; a private one is its creator's, and its club's members' when it
     /// belongs to a club. False for a missing drill.
     /// </summary>
+    Task<CommentStanding> GetCommentStandingAsync(Guid id, Guid userId);
     Task<bool> CanReadAsync(Guid id, Guid userId);
     Task<DrillDto> CreateAsync(CreateDrillDto request, Guid userId);
     Task<DrillDto> UpdateAsync(UpdateDrillDto request, Guid userId);
@@ -40,9 +42,7 @@ public interface IDrillService
     Task<IEnumerable<BookmarkedDrillDto>> GetUserBookmarksAsync(Guid userId);
 
     // Comments
-    Task<DrillCommentDto> CreateCommentAsync(Guid drillId, CreateDrillCommentDto request, Guid userId);
     Task<DrillCommentsResponseDto> GetCommentsAsync(Guid drillId, Guid? cursor, int limit);
-    Task DeleteCommentAsync(Guid drillId, Guid commentId, Guid userId);
 
     // Attachments
     Task<DrillAttachmentUploadResponseDto> GetAttachmentUploadUrlAsync(Guid drillId, DrillAttachmentUploadRequestDto request, Guid userId);

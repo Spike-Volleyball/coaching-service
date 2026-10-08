@@ -55,11 +55,6 @@ public class DrillCommentDto
     public ICollection<DrillCommentDto> Replies { get; set; } = new List<DrillCommentDto>();
 }
 
-public record CreateDrillCommentDto(
-    string Content,
-    Guid? ParentCommentId = null
-);
-
 public class DrillCommentsResponseDto
 {
     public ICollection<DrillCommentDto> Items { get; set; } = new List<DrillCommentDto>();

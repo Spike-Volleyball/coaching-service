@@ -5,6 +5,7 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Coaching.Application.DTOs.Templates;
 using Coaching.Domain.Enums;
 using Coaching.Domain.Models.Templates;
@@ -20,7 +21,8 @@ namespace Coaching.Tests.Integration.Controllers;
 
 /// <summary>
 /// SPI-6800: a club's owner read and ran the plan of a session he was not on, and was refused
-/// when he commented on it. Whoever may read an event's plan may discuss it.
+/// when he commented on it. Whoever may read an event's plan may read its comments; writing them
+/// moved to social, and these routes answer 410 Gone.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -62,40 +64,39 @@ public class PlanCommentsControllerTests
     }
 
     [Test]
-    public async Task Comment_ByClubStaffWhoAreNotOnTheEvent_IsKeptAndListed()
+    public async Task Comments_ForClubStaffWhoAreNotOnTheEvent_AreListed()
     {
         // Arrange
         var (eventId, planId) = await SeedEventPlanAsync();
         ResponsibleForTheEvent(eventId, StaffId);
+        await SeedCommentAsync(planId, PlayerId, "Move the serving block before the water break");
         SetAuth(StaffId);
 
         // Act
-        var posted = await PostCommentAsync(planId, "Move the serving block before the water break");
         var listed = await _client.GetAsync($"/v1/plans/{planId}/comments");
 
         // Assert
-        posted.StatusCode.Should().Be(HttpStatusCode.Created);
         listed.StatusCode.Should().Be(HttpStatusCode.OK);
         (await CommentsAsync(listed)).Should().ContainSingle()
             .Which.Should().BeEquivalentTo(
-                new { UserId = StaffId, Content = "Move the serving block before the water break" },
+                new { UserId = PlayerId, Content = "Move the serving block before the water break" },
                 options => options.ExcludingMissingMembers());
     }
 
     [Test]
-    public async Task Comment_ByAParticipant_IsKeptAndListed()
+    public async Task Comments_ForAParticipant_AreListed_WithoutTheOnesRemoved()
     {
         // Arrange
         var (eventId, planId) = await SeedEventPlanAsync();
         OnTheEvent(eventId, PlayerId);
+        await SeedCommentAsync(planId, PlayerId, "Can we finish with a game?");
+        await SeedCommentAsync(planId, StaffId, "Removed", isDeleted: true);
         SetAuth(PlayerId);
 
         // Act
-        var posted = await PostCommentAsync(planId, "Can we finish with a game?");
         var listed = await _client.GetAsync($"/v1/plans/{planId}/comments");
 
         // Assert
-        posted.StatusCode.Should().Be(HttpStatusCode.Created);
         (await CommentsAsync(listed)).Should().ContainSingle().Which.UserId.Should().Be(PlayerId);
     }
 
@@ -108,11 +109,9 @@ public class PlanCommentsControllerTests
         SetAuth(StrangerId);
 
         // Act
-        var posted = await PostCommentAsync(planId, "Nice plan");
         var listed = await _client.GetAsync($"/v1/plans/{planId}/comments");
 
         // Assert
-        posted.StatusCode.Should().Be(HttpStatusCode.Forbidden);
         listed.StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
 
@@ -138,11 +137,9 @@ public class PlanCommentsControllerTests
         SetAuth(PlayerId);
 
         // Act
-        var posted = await PostCommentAsync(Guid.NewGuid(), "Nice plan");
         var listed = await _client.GetAsync($"/v1/plans/{Guid.NewGuid()}/comments");
 
         // Assert
-        posted.StatusCode.Should().Be(HttpStatusCode.NotFound);
         listed.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
@@ -164,53 +161,27 @@ public class PlanCommentsControllerTests
     }
 
     [Test]
-    public async Task Comment_WithNoText_IsBadRequest()
+    public async Task WritingComments_IsGone_BecauseSocialKeepsThemNow()
     {
         // Arrange
         var (eventId, planId) = await SeedEventPlanAsync();
         ResponsibleForTheEvent(eventId, StaffId);
+        var commentId = await SeedCommentAsync(planId, PlayerId, "Can we finish with a game?");
         SetAuth(StaffId);
 
         // Act
-        var posted = await PostCommentAsync(planId, "   ");
-
-        // Assert
-        posted.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-    }
-
-    [Test]
-    public async Task DeleteComment_OfAPlayers_ByClubStaffWhoAreNotOnTheEvent_RemovesIt()
-    {
-        // Arrange
-        var (eventId, planId) = await SeedEventPlanAsync();
-        OnTheEvent(eventId, PlayerId);
-        ResponsibleForTheEvent(eventId, StaffId);
-        var commentId = await CommentAsAsync(PlayerId, planId, "Can we finish with a game?");
-        SetAuth(StaffId);
-
-        // Act
+        var posted = await PostCommentAsync(planId, "Move the serving block");
         var deleted = await _client.DeleteAsync($"/v1/plans/{planId}/comments/{commentId}");
 
         // Assert
-        deleted.StatusCode.Should().Be(HttpStatusCode.NoContent);
-        (await CommentsAsync(await _client.GetAsync($"/v1/plans/{planId}/comments"))).Should().BeEmpty();
-    }
+        foreach (var response in new[] { posted, deleted })
+        {
+            response.StatusCode.Should().Be(HttpStatusCode.Gone);
+            var body = JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
+            body["code"]!.GetValue<string>().Should().Be("COMMENTS_MOVED");
+            body["status"]!.GetValue<int>().Should().Be(410);
+        }
 
-    [Test]
-    public async Task DeleteComment_OfSomebodyElses_ByAParticipant_IsRefused()
-    {
-        // Arrange
-        var (eventId, planId) = await SeedEventPlanAsync();
-        OnTheEvent(eventId, PlayerId);
-        ResponsibleForTheEvent(eventId, StaffId);
-        var commentId = await CommentAsAsync(StaffId, planId, "Bring the ball cart");
-        SetAuth(PlayerId);
-
-        // Act
-        var deleted = await _client.DeleteAsync($"/v1/plans/{planId}/comments/{commentId}");
-
-        // Assert
-        deleted.StatusCode.Should().Be(HttpStatusCode.Forbidden);
         (await CommentsAsync(await _client.GetAsync($"/v1/plans/{planId}/comments"))).Should().ContainSingle();
     }
 
@@ -231,14 +202,17 @@ public class PlanCommentsControllerTests
     }
 
     private Task<HttpResponseMessage> PostCommentAsync(Guid planId, string content) =>
-        _client.PostAsJsonAsync($"/v1/plans/{planId}/comments", new CreatePlanCommentDto(content));
+        _client.PostAsJsonAsync($"/v1/plans/{planId}/comments", new { content });
 
-    private async Task<Guid> CommentAsAsync(Guid userId, Guid planId, string content)
+    private async Task<Guid> SeedCommentAsync(Guid planId, Guid userId, string content, bool isDeleted = false)
     {
-        SetAuth(userId);
-        var posted = await PostCommentAsync(planId, content);
-        posted.StatusCode.Should().Be(HttpStatusCode.Created);
-        return (await posted.Content.ReadFromJsonAsync<PlanCommentDto>(JsonOptions))!.Id;
+        var comment = new PlanComment { TemplateId = planId, UserId = userId, Content = content, IsDeleted = isDeleted };
+
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<CoachingDbContext>();
+        db.Add(comment);
+        await db.SaveChangesAsync();
+        return comment.Id;
     }
 
     private static async Task<List<PlanCommentDto>> CommentsAsync(HttpResponseMessage listed) =>

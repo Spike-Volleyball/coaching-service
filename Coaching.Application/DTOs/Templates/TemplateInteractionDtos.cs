@@ -33,11 +33,6 @@ public class PlanCommentDto
     public DateTime CreatedAt { get; set; }
 }
 
-public record CreatePlanCommentDto(
-    string Content,
-    Guid? ParentCommentId = null
-);
-
 public class PlanCommentsResponseDto
 {
     public List<PlanCommentDto> Items { get; set; } = new();

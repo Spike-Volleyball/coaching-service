@@ -1,5 +1,6 @@
 using AutoMapper;
 using Coaching.Application.Analytics;
+using Coaching.Application.DTOs.Comments;
 using Coaching.Application.DTOs.Templates;
 using Coaching.Application.Interfaces.Repositories;
 using Coaching.Application.Interfaces.Services;
@@ -991,41 +992,6 @@ public class TrainingPlanService : ITrainingPlanService
     // COMMENTS
     // =========================================================================
 
-    public async Task<PlanCommentDto> CreateCommentAsync(Guid planId, CreatePlanCommentDto request, Guid userId)
-    {
-        var plan = await _planRepository.GetByIdAsync(planId);
-        if (plan == null)
-            throw new EntityNotFoundException("Plan not found");
-
-        await AuthorizePlanCommentAccess(plan, userId);
-
-        if (string.IsNullOrWhiteSpace(request.Content))
-            throw new BadRequestException("Comment content is required", ErrorCodeEnum.ValidationError);
-
-        // Validate parent comment if provided
-        if (request.ParentCommentId.HasValue)
-        {
-            var parentComment = await _commentRepository.GetByIdAsync(request.ParentCommentId.Value);
-            if (parentComment == null || parentComment.TemplateId != planId || parentComment.IsDeleted)
-                throw new BadRequestException("Parent comment not found", ErrorCodeEnum.EntityNotFound);
-        }
-
-        var comment = new PlanComment
-        {
-            TemplateId = planId,
-            UserId = userId,
-            Content = request.Content,
-            ParentCommentId = request.ParentCommentId
-        };
-
-        _commentRepository.Add(comment);
-        await _commentRepository.SaveChangesAsync();
-
-        // Re-fetch with details
-        var createdComment = await _commentRepository.GetByIdWithDetailsAsync(comment.Id);
-        return _mapper.Map<PlanCommentDto>(createdComment);
-    }
-
     public async Task<PlanCommentsResponseDto> GetCommentsAsync(Guid planId, Guid? cursor, int limit, Guid userId)
     {
         limit = Math.Clamp(limit, 1, 100);
@@ -1054,39 +1020,25 @@ public class TrainingPlanService : ITrainingPlanService
         };
     }
 
-    public async Task DeleteCommentAsync(Guid planId, Guid commentId, Guid userId)
+    public async Task<CommentStanding> GetCommentStandingAsync(Guid planId, Guid userId)
     {
-        var comment = await _commentRepository.GetByIdAsync(commentId);
-        if (comment == null || comment.TemplateId != planId)
-            throw new EntityNotFoundException("Comment not found");
-
-        // Authorize plan access before revealing any ownership details
-        var plan = await _planRepository.GetByIdAsync(comment.TemplateId);
+        var plan = await _planRepository.GetByIdAsync(planId);
         if (plan == null)
-            throw new EntityNotFoundException("Plan not found");
+            return CommentStanding.Missing;
 
-        await AuthorizePlanCommentAccess(plan, userId);
+        var (exists, canRead) = await ReadStandingAsync(plan, userId);
+        if (!exists)
+            return CommentStanding.Missing;
 
-        if (comment.UserId != userId)
-        {
-            // Allow plan owner to moderate comments
-            var canModerate = plan.CreatedByUserId == userId;
-
-            // For Instance plans, also allow event admins to moderate
-            if (!canModerate && plan.PlanType == PlanType.Instance && plan.EventId != null)
-            {
-                canModerate = await _eventsGrpcClient.IsEventAdminAsync(plan.EventId.Value, userId);
-            }
-
-            if (!canModerate)
-                throw new ForbiddenException("You can only delete your own comments");
-        }
-
-        // Soft delete
-        comment.IsDeleted = true;
-        _commentRepository.Update(comment);
-        await _commentRepository.SaveChangesAsync();
+        return new CommentStanding(Exists: true, canRead, CanModerate: canRead && await CanModerateAsync(plan, userId));
     }
+
+    // The plan's creator moderates its comments, and for an event's plan so do the event's admins.
+    private async Task<bool> CanModerateAsync(TrainingPlan plan, Guid userId) =>
+        plan.CreatedByUserId == userId
+        || (plan.PlanType == PlanType.Instance
+            && plan.EventId is { } eventId
+            && await _eventsGrpcClient.IsEventAdminAsync(eventId, userId));
 
     // =========================================================================
     // HELPER METHODS
@@ -1100,20 +1052,33 @@ public class TrainingPlanService : ITrainingPlanService
     /// </summary>
     private async Task AuthorizePlanCommentAccess(TrainingPlan plan, Guid userId)
     {
-        if (plan.PlanType == PlanType.Instance)
-        {
-            if (plan.EventId == null)
-                throw new BadRequestException("Instance plan has no linked event", ErrorCodeEnum.ValidationError);
+        if (plan.PlanType == PlanType.Instance && plan.EventId == null)
+            throw new BadRequestException("Instance plan has no linked event", ErrorCodeEnum.ValidationError);
 
-            var (eventExists, mayRead) = await EventPlanAccess.StandingAsync(_eventsGrpcClient, plan.EventId.Value, userId);
-            if (!eventExists)
-                throw new EntityNotFoundException("The linked event no longer exists");
-            if (!mayRead)
-                throw new ForbiddenException("Only the event's participants, hosts and club staff can comment on this plan");
+        var (exists, canRead) = await ReadStandingAsync(plan, userId);
+        if (!exists)
+            throw new EntityNotFoundException("The linked event no longer exists");
+        if (canRead)
             return;
-        }
 
-        await EnsureTemplateReadableAsync(plan.Id, userId);
+        throw plan.PlanType == PlanType.Instance
+            ? new ForbiddenException("Only the event's participants, hosts and club staff can comment on this plan")
+            : new EntityNotFoundException("Plan not found");
+    }
+
+    /// <summary>
+    /// Whether the plan's discussion exists for this user, and may be read by them. An instance
+    /// plan with no event, which has nothing to ask, is readable by no one.
+    /// </summary>
+    private async Task<(bool Exists, bool CanRead)> ReadStandingAsync(TrainingPlan plan, Guid userId)
+    {
+        if (plan.PlanType != PlanType.Instance)
+            return (true, await IsTemplateReadableAsync(plan.Id, userId));
+
+        if (plan.EventId == null)
+            return (true, false);
+
+        return await EventPlanAccess.StandingAsync(_eventsGrpcClient, plan.EventId.Value, userId);
     }
 
     /// <summary>
@@ -1122,10 +1087,15 @@ public class TrainingPlanService : ITrainingPlanService
     /// </summary>
     private async Task EnsureTemplateReadableAsync(Guid planId, Guid userId)
     {
+        if (!await IsTemplateReadableAsync(planId, userId))
+            throw new EntityNotFoundException("Plan not found");
+    }
+
+    private async Task<bool> IsTemplateReadableAsync(Guid planId, Guid userId)
+    {
         var plan = _planRepository.Query().Where(p => p.Id == planId);
         var memberClubIds = await MemberClubsAmongAsync(plan, userId);
-        if (!await plan.AnyAsync(TrainingPlan.TemplateReadableBy(userId, memberClubIds)))
-            throw new EntityNotFoundException("Plan not found");
+        return await plan.AnyAsync(TrainingPlan.TemplateReadableBy(userId, memberClubIds));
     }
 
     /// <summary>

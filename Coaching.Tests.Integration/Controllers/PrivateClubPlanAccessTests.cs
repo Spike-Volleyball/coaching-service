@@ -168,12 +168,12 @@ public class PrivateClubPlanAccessTests
         // Act
         var liked = await _client.PostAsync($"/v1/plans/{planId}/like", null);
         var bookmarked = await _client.PostAsync($"/v1/plans/{planId}/bookmark", null);
-        var commented = await _client.PostAsJsonAsync($"/v1/plans/{planId}/comments", new CreatePlanCommentDto("Running this on Thursday"));
+        var comments = await _client.GetAsync($"/v1/plans/{planId}/comments");
 
         // Assert
         liked.StatusCode.Should().Be(HttpStatusCode.OK);
         bookmarked.StatusCode.Should().Be(HttpStatusCode.OK);
-        commented.StatusCode.Should().Be(HttpStatusCode.Created);
+        comments.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     [Test]
