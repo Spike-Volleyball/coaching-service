@@ -19,6 +19,7 @@ DELETE /v{version:apiVersion}/plans/{id:guid}/items/{itemId:guid}
 DELETE /v{version:apiVersion}/plans/{id:guid}/like
 DELETE /v{version:apiVersion}/plans/{id:guid}/sections/{sectionId:guid}
 DELETE /v{version:apiVersion}/tactics-boards/{id:guid}
+DELETE /v{version:apiVersion}/tactics-boards/{id:guid}/share
 DELETE /v{version:apiVersion}/tactics-folders/{id:guid}
 DELETE /v{version:apiVersion}/thresholds/{id:guid}
 GET /v{version:apiVersion}/clubs/{clubId:guid}/drills
@@ -79,6 +80,7 @@ POST /v{version:apiVersion}/plans/{id:guid}/items
 POST /v{version:apiVersion}/plans/{id:guid}/like
 POST /v{version:apiVersion}/plans/{id:guid}/promote
 POST /v{version:apiVersion}/plans/{id:guid}/sections
+POST /v{version:apiVersion}/tactics-boards/{id:guid}/share
 PUT /v{version:apiVersion}/evaluation-exercises/{id:guid}
 PUT /v{version:apiVersion}/evaluation-exercises/{id:guid}/metrics/{metricId:guid}
 PUT /v{version:apiVersion}/evaluation-exercises/{id:guid}/metrics/{metricId:guid}/skill-weights

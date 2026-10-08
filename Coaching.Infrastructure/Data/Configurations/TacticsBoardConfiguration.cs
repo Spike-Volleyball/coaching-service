@@ -22,6 +22,10 @@ public class TacticsBoardConfiguration : IEntityTypeConfiguration<TacticsBoard>
         // every tool it grows, and none of those changes should need a migration.
         builder.Property(e => e.Document).HasColumnType("jsonb").IsRequired();
 
+        builder.Property(e => e.ShareToken).HasMaxLength(TacticsBoard.ShareTokenMaxLength);
+        builder.Property(e => e.SharedDocument).HasColumnType("jsonb");
+        builder.HasIndex(e => e.ShareToken).IsUnique().HasFilter("\"ShareToken\" IS NOT NULL");
+
         // Also in the UPDATE's WHERE clause, so two saves that raced cannot both win — the second
         // one affects no rows and EF raises rather than silently overwriting the first.
         builder.Property(e => e.Version).IsConcurrencyToken().HasDefaultValue(0);

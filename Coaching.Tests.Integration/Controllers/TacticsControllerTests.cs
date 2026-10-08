@@ -5,6 +5,7 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Coaching.Domain.Enums;
 using Coaching.Infrastructure.Data.Context;
 using Coaching.Tests.Integration.Fixtures;
@@ -35,11 +36,17 @@ public class TacticsControllerTests
     };
 
     private const string Document = """{"frames":[{"id":"f1"}],"system":"5-1"}""";
+    private const string PublicCopy = """{"frames":[{"id":"f1"}],"system":"5-1","anonymous":true}""";
+    private const string NewerPublicCopy = """{"frames":[{"id":"f1"},{"id":"f2"}],"anonymous":true}""";
 
     private sealed record BoardResponse(
         Guid Id, string Title, string Category, string System, string Scope,
         Guid? ClubId, Guid? TeamId, Guid? FolderId, bool IsFavorite,
-        int FrameCount, int Version, DateTime UpdatedAt, string? Document);
+        int FrameCount, int Version, DateTime UpdatedAt, string? Document, string? ShareToken = null);
+
+    private sealed record ShareResponse(string Token);
+
+    private sealed record SharedBoardResponse(string Title, string Document, DateTime UpdatedAt);
 
     private sealed record FolderResponse(
         Guid Id, string Name, string Scope, Guid? ClubId, Guid? TeamId,
@@ -647,6 +654,255 @@ public class TacticsControllerTests
         (await CountBoardsAsync()).Should().Be(0);
     }
 
+    [Test]
+    public async Task ShareBoard_PersonalBoard_ReturnsATokenAndSharingAgainReturnsTheSame()
+    {
+        // Arrange
+        var boardId = Guid.NewGuid();
+        SetAuth(Guid.NewGuid());
+        await SaveAsync(boardId, BoardRequest());
+
+        // Act
+        var first = await ShareAsync(boardId, PublicCopy);
+        var second = await ShareAsync(boardId, NewerPublicCopy);
+
+        // Assert
+        first.Token.Should().NotBeNullOrWhiteSpace();
+        second.Token.Should().Be(first.Token);
+        var read = await GetBoardAsync(boardId);
+        read.ShareToken.Should().Be(first.Token);
+        var shelf = await _client.GetFromJsonAsync<List<BoardResponse>>("/v1/tactics-boards?scope=personal", JsonOptions);
+        shelf!.Single().ShareToken.Should().Be(first.Token);
+    }
+
+    [Test]
+    public async Task GetShared_WithNoAuth_ReturnsThePublicCopyAndNoneOfThePrivateFields()
+    {
+        // Arrange
+        var boardId = Guid.NewGuid();
+        SetAuth(Guid.NewGuid());
+        await SaveAsync(boardId, BoardRequest());
+        var share = await ShareAsync(boardId, PublicCopy);
+        _client.DefaultRequestHeaders.Authorization = null;
+
+        // Act
+        var response = await _client.GetAsync($"/v1/tactics-boards/shared/{share.Token}");
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var raw = await response.Content.ReadAsStringAsync();
+        var shared = JsonSerializer.Deserialize<SharedBoardResponse>(raw, JsonOptions)!;
+        shared.Title.Should().Be("Serve receive");
+        JsonDocument.Parse(shared.Document).RootElement.GetProperty("anonymous").GetBoolean().Should().BeTrue();
+        using var body = JsonDocument.Parse(raw);
+        body.RootElement.EnumerateObject().Select(p => p.Name)
+            .Should().BeEquivalentTo("title", "document", "updatedAt");
+    }
+
+    [Test]
+    public async Task SaveBoard_OfASharedBoardWithAPublicCopy_ReplacesIt()
+    {
+        // Arrange
+        var boardId = Guid.NewGuid();
+        SetAuth(Guid.NewGuid());
+        await SaveAsync(boardId, BoardRequest());
+        var share = await ShareAsync(boardId, PublicCopy);
+
+        // Act
+        await SaveAsync(boardId, BoardRequest(expectedVersion: 1, sharedDocument: NewerPublicCopy));
+
+        // Assert
+        SameJson((await ReadSharedAsync(share.Token)).Document, NewerPublicCopy).Should().BeTrue();
+    }
+
+    [Test]
+    public async Task SaveBoard_OfASharedBoardWithoutAPublicCopy_LeavesThePreviousOne()
+    {
+        // Arrange
+        var boardId = Guid.NewGuid();
+        SetAuth(Guid.NewGuid());
+        await SaveAsync(boardId, BoardRequest());
+        var share = await ShareAsync(boardId, PublicCopy);
+
+        // Act
+        await SaveAsync(boardId, BoardRequest(expectedVersion: 1, document: NewerPublicCopy));
+
+        // Assert
+        SameJson((await ReadSharedAsync(share.Token)).Document, PublicCopy).Should().BeTrue();
+    }
+
+    [Test]
+    public async Task SaveBoard_OfAnUnsharedBoardWithAPublicCopy_StoresNothing()
+    {
+        // Arrange
+        var boardId = Guid.NewGuid();
+        SetAuth(Guid.NewGuid());
+        await SaveAsync(boardId, BoardRequest(sharedDocument: NewerPublicCopy));
+
+        // Act
+        var share = await ShareAsync(boardId, PublicCopy);
+
+        // Assert
+        SameJson((await ReadSharedAsync(share.Token)).Document, PublicCopy).Should().BeTrue();
+    }
+
+    [Test]
+    public async Task ShareBoard_DoesNotBumpTheVersion_SoAnOpenEditorCanStillSave()
+    {
+        // Arrange
+        var boardId = Guid.NewGuid();
+        SetAuth(Guid.NewGuid());
+        await SaveAsync(boardId, BoardRequest());
+        var version = (await GetBoardAsync(boardId)).Version;
+
+        // Act
+        await ShareAsync(boardId, PublicCopy);
+        var response = await _client.PutAsJsonAsync(
+            $"/v1/tactics-boards/{boardId}", BoardRequest(expectedVersion: version), JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await GetBoardAsync(boardId)).Version.Should().Be(version + 1);
+    }
+
+    [Test]
+    public async Task StopSharing_MakesTheLinkNotFoundAndASecondShareIssuesANewToken()
+    {
+        // Arrange
+        var boardId = Guid.NewGuid();
+        SetAuth(Guid.NewGuid());
+        await SaveAsync(boardId, BoardRequest());
+        var share = await ShareAsync(boardId, PublicCopy);
+
+        // Act
+        var stop = await _client.DeleteAsync($"/v1/tactics-boards/{boardId}/share");
+        var stopAgain = await _client.DeleteAsync($"/v1/tactics-boards/{boardId}/share");
+
+        // Assert
+        stop.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        stopAgain.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        (await _client.GetAsync($"/v1/tactics-boards/shared/{share.Token}")).StatusCode
+            .Should().Be(HttpStatusCode.NotFound);
+        (await GetBoardAsync(boardId)).ShareToken.Should().BeNull();
+
+        var renewed = await ShareAsync(boardId, PublicCopy);
+        renewed.Token.Should().NotBe(share.Token);
+        (await _client.GetAsync($"/v1/tactics-boards/shared/{share.Token}")).StatusCode
+            .Should().Be(HttpStatusCode.NotFound);
+        (await _client.GetAsync($"/v1/tactics-boards/shared/{renewed.Token}")).StatusCode
+            .Should().Be(HttpStatusCode.OK);
+    }
+
+    [Test]
+    public async Task GetShared_AnUnknownToken_ReturnsNotFound()
+    {
+        // Act
+        var response = await _client.GetAsync("/v1/tactics-boards/shared/not-a-token");
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Test]
+    public async Task GetShared_ADeletedBoardsToken_ReturnsNotFound()
+    {
+        // Arrange
+        var boardId = Guid.NewGuid();
+        SetAuth(Guid.NewGuid());
+        await SaveAsync(boardId, BoardRequest());
+        var share = await ShareAsync(boardId, PublicCopy);
+        await _client.DeleteAsync($"/v1/tactics-boards/{boardId}");
+
+        // Act
+        var response = await _client.GetAsync($"/v1/tactics-boards/shared/{share.Token}");
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Test]
+    public async Task ShareBoard_SomebodyElsesPersonalBoard_ReturnsForbiddenAndStopSharingToo()
+    {
+        // Arrange
+        var boardId = Guid.NewGuid();
+        SetAuth(Guid.NewGuid());
+        await SaveAsync(boardId, BoardRequest());
+        var share = await ShareAsync(boardId, PublicCopy);
+
+        // Act
+        SetAuth(Guid.NewGuid());
+        var shareResponse = await _client.PostAsJsonAsync(
+            $"/v1/tactics-boards/{boardId}/share", new { document = PublicCopy }, JsonOptions);
+        var stopResponse = await _client.DeleteAsync($"/v1/tactics-boards/{boardId}/share");
+
+        // Assert
+        shareResponse.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        stopResponse.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await _client.GetAsync($"/v1/tactics-boards/shared/{share.Token}")).StatusCode
+            .Should().Be(HttpStatusCode.OK);
+    }
+
+    [Test]
+    public async Task ShareBoard_WithAnInvalidPublicCopy_ReturnsBadRequestAndSharesNothing()
+    {
+        // Arrange
+        var boardId = Guid.NewGuid();
+        SetAuth(Guid.NewGuid());
+        await SaveAsync(boardId, BoardRequest());
+        var tooLarge = "{\"x\":\"" + new string('a', 2_000_000) + "\"}";
+
+        foreach (var invalid in new[] { "[1,2]", "not json", tooLarge })
+        {
+            // Act
+            var response = await _client.PostAsJsonAsync(
+                $"/v1/tactics-boards/{boardId}/share", new { document = invalid }, JsonOptions);
+
+            // Assert
+            response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        }
+
+        (await GetBoardAsync(boardId)).ShareToken.Should().BeNull();
+    }
+
+    [Test]
+    public async Task SaveBoard_OfASharedBoardWithAnInvalidPublicCopy_ReturnsBadRequest()
+    {
+        // Arrange
+        var boardId = Guid.NewGuid();
+        SetAuth(Guid.NewGuid());
+        await SaveAsync(boardId, BoardRequest());
+        await ShareAsync(boardId, PublicCopy);
+
+        // Act
+        var response = await _client.PutAsJsonAsync(
+            $"/v1/tactics-boards/{boardId}", BoardRequest(expectedVersion: 1, sharedDocument: "[1]"), JsonOptions);
+
+        // Assert
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    private async Task<ShareResponse> ShareAsync(Guid boardId, string publicCopy)
+    {
+        var response = await _client.PostAsJsonAsync(
+            $"/v1/tactics-boards/{boardId}/share", new { document = publicCopy }, JsonOptions);
+        response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
+        return (await response.Content.ReadFromJsonAsync<ShareResponse>(JsonOptions))!;
+    }
+
+    private async Task<SharedBoardResponse> ReadSharedAsync(string token)
+    {
+        var response = await _client.GetAsync($"/v1/tactics-boards/shared/{token}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        return (await response.Content.ReadFromJsonAsync<SharedBoardResponse>(JsonOptions))!;
+    }
+
+    private async Task<BoardResponse> GetBoardAsync(Guid boardId) =>
+        (await _client.GetFromJsonAsync<BoardResponse>($"/v1/tactics-boards/{boardId}", JsonOptions))!;
+
+    // jsonb hands the document back normalised, so compare the JSON, not the text.
+    private static bool SameJson(string actual, string expected) =>
+        JsonNode.DeepEquals(JsonNode.Parse(actual), JsonNode.Parse(expected));
+
     private static object SeedRequest(string scope = "personal", Guid? clubId = null) => new
     {
         scope,
@@ -701,7 +957,8 @@ public class TacticsControllerTests
         Guid? teamId = null,
         Guid? folderId = null,
         string document = Document,
-        int? expectedVersion = null) => new
+        int? expectedVersion = null,
+        string? sharedDocument = null) => new
         {
             title,
             category = "Match day",
@@ -713,7 +970,8 @@ public class TacticsControllerTests
             isFavorite = false,
             frameCount = 1,
             document,
-            expectedVersion
+            expectedVersion,
+            sharedDocument
         };
 
     private void SetAuth(Guid userId)

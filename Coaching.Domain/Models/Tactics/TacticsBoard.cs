@@ -12,6 +12,7 @@ namespace Coaching.Domain.Models.Tactics;
 /// </summary>
 public class TacticsBoard : BaseEntity
 {
+    public const int ShareTokenMaxLength = 64;
     public const int TitleMaxLength = 120;
     public const int CategoryMaxLength = 60;
     public const int SystemMaxLength = 20;
@@ -66,4 +67,16 @@ public class TacticsBoard : BaseEntity
 
     /// <summary>The whole board as JSON, exactly as the editor holds it.</summary>
     public required string Document { get; set; }
+
+    /// <summary>
+    /// What a link to this board carries, and the only thing that opens it signed out. Null while
+    /// the board is not shared; stopping and sharing again issues a new one, so an old link stays dead.
+    /// </summary>
+    public string? ShareToken { get; set; }
+
+    /// <summary>
+    /// What the link shows: a copy the client prepared with people's names and photos taken out.
+    /// Never derived from <see cref="Document"/> here, which the server does not read.
+    /// </summary>
+    public string? SharedDocument { get; set; }
 }

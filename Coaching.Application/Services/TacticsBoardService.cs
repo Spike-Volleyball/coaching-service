@@ -1,4 +1,6 @@
+using System.Buffers.Text;
 using System.Linq.Expressions;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Coaching.Application.DTOs.Tactics;
 using Coaching.Application.Interfaces.Services;
@@ -29,6 +31,9 @@ public class TacticsBoardService(
     /// <summary>The most tools a board may name, and the longest a name may be: the editor has a handful, each a word.</summary>
     public const int MaxTools = 16;
     public const int MaxToolLength = 32;
+
+    /// <summary>How much randomness a link's token carries: the token is all that stands between a stranger and the board.</summary>
+    private const int ShareTokenBytes = 32;
 
     public async Task<IReadOnlyList<TacticsBoardDto>> ListBoardsAsync(TacticsShelfQuery query, Guid userId)
     {
@@ -99,6 +104,8 @@ public class TacticsBoardService(
         board.IsFavorite = request.IsFavorite;
         board.FrameCount = Math.Max(request.FrameCount, 0);
         board.Document = document;
+        if (board.ShareToken is not null && request.SharedDocument is not null)
+            board.SharedDocument = ValidDocument(request.SharedDocument);
         board.Version++;
 
         var toolsChanged = !board.Tools.ToHashSet().SetEquals(tools);
@@ -153,6 +160,52 @@ public class TacticsBoardService(
 
         boards.Delete(board);
         await boards.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Opens the board to anyone with its link, showing the copy the client prepared. A board that
+    /// is already shared keeps its token, so sharing twice hands back the same link. The version is
+    /// left alone: a coach with the board open is not saving anything they could clash with.
+    /// </summary>
+    public async Task<TacticsBoardShareDto> ShareBoardAsync(Guid boardId, ShareTacticsBoardRequest request, Guid userId)
+    {
+        var board = await boards.GetByIdAsync(boardId) ?? throw NoBoard();
+        await TacticsAccess.EnsureMayOpenAsync(board, userId, clubs);
+
+        board.SharedDocument = ValidDocument(request.Document);
+        board.ShareToken ??= Base64Url.EncodeToString(RandomNumberGenerator.GetBytes(ShareTokenBytes));
+        await boards.SaveChangesAsync();
+
+        return new TacticsBoardShareDto { Token = board.ShareToken };
+    }
+
+    public async Task StopSharingBoardAsync(Guid boardId, Guid userId)
+    {
+        var board = await boards.GetByIdAsync(boardId) ?? throw NoBoard();
+        await TacticsAccess.EnsureMayOpenAsync(board, userId, clubs);
+
+        if (board.ShareToken is null)
+            return;
+
+        board.ShareToken = null;
+        board.SharedDocument = null;
+        await boards.SaveChangesAsync();
+    }
+
+    public async Task<SharedTacticsBoardDto> GetSharedBoardAsync(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            throw NoBoard();
+
+        return await boards.QueryNoTracking()
+            .Where(b => b.ShareToken == token && b.SharedDocument != null)
+            .Select(b => new SharedTacticsBoardDto
+            {
+                Title = b.Title,
+                Document = b.SharedDocument!,
+                UpdatedAt = b.UpdatedAt ?? b.CreatedAt ?? DateTime.MinValue
+            })
+            .FirstOrDefaultAsync() ?? throw NoBoard();
     }
 
     public async Task<IReadOnlyList<TacticsBoardDto>> SeedBoardsAsync(SeedTacticsBoardsRequest request, Guid userId)
@@ -438,7 +491,8 @@ public class TacticsBoardService(
         IsFavorite = board.IsFavorite,
         FrameCount = board.FrameCount,
         Version = board.Version,
-        UpdatedAt = board.UpdatedAt ?? board.CreatedAt ?? DateTime.MinValue
+        UpdatedAt = board.UpdatedAt ?? board.CreatedAt ?? DateTime.MinValue,
+        ShareToken = board.ShareToken
     };
 
     private static readonly Expression<Func<TacticsFolder, TacticsFolderDto>> FolderProjection = folder => new TacticsFolderDto
