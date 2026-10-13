@@ -51,6 +51,34 @@ public class FeedbackMediaUrlSignerTests : UnitTestBase
     }
 
     [Test]
+    public void SignReadUrl_SvgKey_OverridesDispositionToAttachment()
+    {
+        // Arrange
+        var stored = $"{PublicBaseUrl}/feedback/coach-1/file-1.svg";
+
+        // Act
+        _sut.SignReadUrl(stored);
+
+        // Assert
+        _s3.Received(1).GetPreSignedURL(Arg.Is<GetPreSignedUrlRequest>(r =>
+            r.ResponseHeaderOverrides.ContentDisposition == "attachment; filename=\"file-1.svg\""));
+    }
+
+    [Test]
+    public void SignReadUrl_NonSvgKey_LeavesDispositionAlone()
+    {
+        // Arrange
+        var stored = $"{PublicBaseUrl}/feedback/coach-1/file-1.mp4";
+
+        // Act
+        _sut.SignReadUrl(stored);
+
+        // Assert
+        _s3.Received(1).GetPreSignedURL(Arg.Is<GetPreSignedUrlRequest>(r =>
+            r.ResponseHeaderOverrides.ContentDisposition == null));
+    }
+
+    [Test]
     public void SignReadUrl_ExternalUrl_IsReturnedUntouched()
     {
         // Arrange

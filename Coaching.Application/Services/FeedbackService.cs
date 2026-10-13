@@ -15,6 +15,7 @@ using Shared.Exceptions;
 using Shared.Messaging.Contracts.Events.Coaching;
 using Shared.Models;
 using Shared.Options;
+using Shared.Services.FileStorage;
 using Shared.Services.FileStorage.Intefaces;
 
 namespace Coaching.Application.Services;
@@ -43,6 +44,7 @@ public class FeedbackService(
         ["image/png"] = 10L * 1024 * 1024,
         ["image/gif"] = 10L * 1024 * 1024,
         ["image/webp"] = 10L * 1024 * 1024,
+        [ContentTypes.Svg] = 10L * 1024 * 1024,
         ["video/mp4"] = 100L * 1024 * 1024,
         ["video/quicktime"] = 100L * 1024 * 1024,
         ["video/webm"] = 100L * 1024 * 1024,
@@ -59,6 +61,7 @@ public class FeedbackService(
         ["image/png"] = ".png",
         ["image/gif"] = ".gif",
         ["image/webp"] = ".webp",
+        [ContentTypes.Svg] = ".svg",
         ["video/mp4"] = ".mp4",
         ["video/quicktime"] = ".mov",
         ["video/webm"] = ".webm",
