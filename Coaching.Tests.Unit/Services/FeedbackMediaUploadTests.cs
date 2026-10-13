@@ -165,4 +165,23 @@ public class FeedbackMediaUploadTests : UnitTestBase
             "test-bucket",
             "image/svg+xml");
     }
+
+    [TestCase("application/zip")]
+    [TestCase("application/x-zip-compressed")]
+    public async Task GetMediaUploadUrl_AcceptsZipWithZipKeyUpToDocumentLimit(string contentType)
+    {
+        // Arrange
+        var request = new FeedbackMediaUploadRequestDto { FileName = "plans.zip", ContentType = contentType, FileSize = 25L * 1024 * 1024 };
+        var tooBig = new FeedbackMediaUploadRequestDto { FileName = "plans.zip", ContentType = contentType, FileSize = 25L * 1024 * 1024 + 1 };
+
+        // Act
+        var result = await _sut.GetMediaUploadUrlAsync(request, Guid.NewGuid());
+
+        // Assert
+        result.UploadUrl.Should().NotBeNullOrEmpty();
+        await _fileService.Received(1).GetPresignedUploadLink(
+            Arg.Is<string>(key => key.StartsWith("feedback/") && key.EndsWith(".zip")), "test-bucket", contentType);
+        await _sut.Invoking(s => s.GetMediaUploadUrlAsync(tooBig, Guid.NewGuid()))
+            .Should().ThrowAsync<Shared.Exceptions.BadRequestException>();
+    }
 }
