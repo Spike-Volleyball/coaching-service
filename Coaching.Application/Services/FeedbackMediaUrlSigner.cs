@@ -3,6 +3,7 @@ using Amazon.S3.Model;
 using Coaching.Application.Interfaces.Services;
 using Microsoft.Extensions.Options;
 using Shared.Options;
+using Shared.Services.FileStorage;
 
 namespace Coaching.Application.Services;
 
@@ -21,17 +22,27 @@ public class FeedbackMediaUrlSigner(
     // session; clients refetch feedback on open, so URLs renew well before this.
     public static readonly TimeSpan ReadUrlLifetime = TimeSpan.FromHours(24);
 
+    private const string SvgExtension = ".svg";
+
     public string SignReadUrl(string url)
     {
         if (!IsStored(url)) return url;
 
-        return s3.GetPreSignedURL(new GetPreSignedUrlRequest
+        var key = KeyOf(url);
+        var request = new GetPreSignedUrlRequest
         {
             BucketName = s3Settings.Value.Bucket,
-            Key = KeyOf(url),
+            Key = key,
             Verb = HttpVerb.GET,
             Expires = timeProvider.GetUtcNow().UtcDateTime.Add(ReadUrlLifetime),
-        });
+        };
+
+        // The object is stored without a disposition, so a navigated-to SVG would run its scripts
+        // on the bucket origin; <img> ignores the header and still draws it.
+        if (key.EndsWith(SvgExtension, StringComparison.OrdinalIgnoreCase))
+            request.ResponseHeaderOverrides.ContentDisposition = ContentDispositionValue.Attachment(Path.GetFileName(key));
+
+        return s3.GetPreSignedURL(request);
     }
 
     public bool IsStored(string url) =>

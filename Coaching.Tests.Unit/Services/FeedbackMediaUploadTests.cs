@@ -143,4 +143,26 @@ public class FeedbackMediaUploadTests : UnitTestBase
         // Assert
         result.UploadUrl.Should().NotBeNullOrEmpty();
     }
+
+    [Test]
+    public async Task GetMediaUploadUrl_AcceptsSvgWithSvgKey()
+    {
+        // Arrange
+        var request = new FeedbackMediaUploadRequestDto
+        {
+            FileName = "drawing.svg",
+            ContentType = "image/svg+xml",
+            FileSize = 10L * 1024 * 1024
+        };
+
+        // Act
+        var result = await _sut.GetMediaUploadUrlAsync(request, Guid.NewGuid());
+
+        // Assert
+        result.UploadUrl.Should().NotBeNullOrEmpty();
+        await _fileService.Received(1).GetPresignedUploadLink(
+            Arg.Is<string>(key => key.StartsWith("feedback/") && key.EndsWith(".svg")),
+            "test-bucket",
+            "image/svg+xml");
+    }
 }
