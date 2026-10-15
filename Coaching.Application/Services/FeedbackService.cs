@@ -15,6 +15,7 @@ using Shared.Exceptions;
 using Shared.Messaging.Contracts.Events.Coaching;
 using Shared.Models;
 using Shared.Options;
+using Shared.Services.FileStorage;
 using Shared.Services.FileStorage.Intefaces;
 
 namespace Coaching.Application.Services;
@@ -37,16 +38,23 @@ public class FeedbackService(
     IPublishEndpoint publishEndpoint) : IFeedbackService
 {
     private static readonly HtmlSanitizer _htmlSanitizer = CreateSanitizer();
+    private const string ZipContentType = "application/zip";
+    // What Chrome, Edge and Firefox on Windows report for a .zip.
+    private const string ZipCompressedContentType = "application/x-zip-compressed";
+
     private static readonly Dictionary<string, long> AllowedMediaTypes = new()
     {
         ["image/jpeg"] = 10L * 1024 * 1024,
         ["image/png"] = 10L * 1024 * 1024,
         ["image/gif"] = 10L * 1024 * 1024,
         ["image/webp"] = 10L * 1024 * 1024,
+        [ContentTypes.Svg] = 10L * 1024 * 1024,
         ["video/mp4"] = 100L * 1024 * 1024,
         ["video/quicktime"] = 100L * 1024 * 1024,
         ["video/webm"] = 100L * 1024 * 1024,
         ["application/pdf"] = 25L * 1024 * 1024,
+        [ZipContentType] = 25L * 1024 * 1024,
+        [ZipCompressedContentType] = 25L * 1024 * 1024,
         ["application/msword"] = 25L * 1024 * 1024,
         ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"] = 25L * 1024 * 1024,
         ["application/vnd.ms-excel"] = 25L * 1024 * 1024,
@@ -59,10 +67,13 @@ public class FeedbackService(
         ["image/png"] = ".png",
         ["image/gif"] = ".gif",
         ["image/webp"] = ".webp",
+        [ContentTypes.Svg] = ".svg",
         ["video/mp4"] = ".mp4",
         ["video/quicktime"] = ".mov",
         ["video/webm"] = ".webm",
         ["application/pdf"] = ".pdf",
+        [ZipContentType] = ".zip",
+        [ZipCompressedContentType] = ".zip",
         ["application/msword"] = ".doc",
         ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"] = ".docx",
         ["application/vnd.ms-excel"] = ".xls",
