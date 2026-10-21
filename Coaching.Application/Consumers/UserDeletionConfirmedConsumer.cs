@@ -30,10 +30,7 @@ public class UserDeletionConfirmedConsumer : IConsumer<UserDeletionConfirmedEven
         var profile = await _userProfileRepository.GetByIdAsync(userId);
         if (profile != null)
         {
-            profile.Name = "Deleted User";
-            profile.Surname = string.Empty;
-            profile.Email = string.Empty;
-            profile.IsActive = false;
+            profile.Anonymize();
             _userProfileRepository.Update(profile);
             await _userProfileRepository.SaveChangesAsync();
         }
